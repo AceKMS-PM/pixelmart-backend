@@ -557,7 +557,7 @@ Client  →  POST /products/  →  IsAuthenticatedOrReadOnly (pass)
                                   →  unique_slug(Product, title)
                                   →  Product.objects.create()
                                   →  ProductVariant.objects.create() × N
-                            ←  ProductSerializer(product).data  [201]
+                            ←  ProductSerializer(product).data [201]
 ```
 
 ---
