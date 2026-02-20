@@ -1,40 +1,187 @@
-from rest_framework import viewsets, permissions
+from rest_framework import viewsets, mixins, permissions, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework.exceptions import PermissionDenied, ValidationError
+from django.utils import timezone
 
 from .models import Review, Message, Notification
+from .serializers import (
+    ReviewPublicSerializer,
+    ReviewCreateSerializer,
+    ReviewVendorSerializer,
+    ReviewAdminSerializer,
+    MessageSerializer,
+    NotificationSerializer,
+)
 
+
+def _role(user):
+    return getattr(user, 'role', 'customer')
+
+
+# ── Reviews ───────────────────────────────────────────────────────────────────
 
 class ReviewViewSet(viewsets.ModelViewSet):
-    permission_classes = [permissions.IsAuthenticated]
+    """
+    GET  /reviews/           → public (only published reviews)
+    GET  /reviews/{id}/      → public
+    POST /reviews/           → authenticated customer (must have ordered the product)
+    PATCH /reviews/{id}/     → vendor (reply only) OR admin (all fields)
+    DELETE /reviews/{id}/    → admin only
+    """
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
     def get_queryset(self):
         user = self.request.user
-        # Admins see all; others see only reviews they wrote or reviews for their store products
-        if getattr(user, 'role', None) == 'admin':
-            return Review.objects.all()
-        return Review.objects.filter(
-            # reviews the user wrote OR reviews on products in their store
-            __import__('django.db.models', fromlist=['Q']).Q(reviewer=user) |
-            __import__('django.db.models', fromlist=['Q']).Q(product__store__owner=user)
-        ).distinct()
+        role = _role(user) if user.is_authenticated else None
+
+        if role == 'admin':
+            return Review.objects.select_related('customer', 'product', 'store').all()
+
+        if role == 'vendor':
+            # Vendors see all reviews on their store products (incl. unpublished, for moderation)
+            return Review.objects.select_related('customer', 'product', 'store').filter(
+                store__owner=user
+            )
+
+        # Public / customer: only published reviews
+        return Review.objects.select_related('customer', 'product', 'store').filter(
+            is_published=True
+        )
+
+    def get_serializer_class(self):
+        role = _role(self.request.user) if self.request.user.is_authenticated else None
+        if role == 'admin':
+            return ReviewAdminSerializer
+        if role == 'vendor':
+            return ReviewVendorSerializer
+        if self.action in ['create']:
+            return ReviewCreateSerializer
+        return ReviewPublicSerializer
 
     def perform_create(self, serializer):
-        serializer.save(reviewer=self.request.user)
+        user = self.request.user
+        if _role(user) != 'customer':
+            raise PermissionDenied('Only customers can write reviews.')
+
+        product_id = self.request.data.get('product')
+        order_id = self.request.data.get('order')
+
+        # Verify the customer actually ordered this product
+        from orders.models import Order, OrderItem
+        if not OrderItem.objects.filter(
+            order__customer=user,
+            order_id=order_id,
+            product_id=product_id,
+        ).exists():
+            raise ValidationError('You can only review products you have purchased.')
+
+        try:
+            from products.models import Product
+            product = Product.objects.get(pk=product_id)
+            order = Order.objects.get(pk=order_id, customer=user)
+        except Exception:
+            raise ValidationError('Invalid product or order.')
+
+        serializer.save(
+            customer=user,
+            product=product,
+            order=order,
+            store=product.store,
+        )
+
+    def update(self, request, *args, **kwargs):
+        review = self.get_object()
+        role = _role(request.user)
+
+        if role == 'customer':
+            raise PermissionDenied('Customers cannot edit reviews after submission.')
+
+        if role == 'vendor':
+            # Vendors can only set vendor_reply on their own store's reviews
+            if review.store.owner != request.user:
+                raise PermissionDenied('You can only reply to reviews on your own store.')
+            allowed_fields = {'vendor_reply'}
+            disallowed = set(request.data.keys()) - allowed_fields
+            if disallowed:
+                raise PermissionDenied(f'Vendors may only set: {allowed_fields}.')
+            # Auto-stamp replied_at
+            review.vendor_reply = request.data.get('vendor_reply', review.vendor_reply)
+            review.replied_at = timezone.now()
+            review.save(update_fields=['vendor_reply', 'replied_at'])
+            return Response(ReviewVendorSerializer(review).data)
+
+        # Admin: full update via serializer
+        return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        if _role(request.user) != 'admin':
+            raise PermissionDenied('Only admins can delete reviews.')
+        return super().destroy(request, *args, **kwargs)
 
 
-class MessageViewSet(viewsets.ModelViewSet):
+# ── Messages ──────────────────────────────────────────────────────────────────
+
+class MessageViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.CreateModelMixin,
+    viewsets.GenericViewSet,
+):
+    """
+    Messages are immutable after sending (no update/delete for users).
+    Sender is always request.user — never from request body.
+    """
     permission_classes = [permissions.IsAuthenticated]
+    serializer_class = MessageSerializer
 
     def get_queryset(self):
-        user = self.request.user
         from django.db.models import Q
-        return Message.objects.filter(Q(sender=user) | Q(receiver=user))
+        user = self.request.user
+        return Message.objects.filter(
+            Q(sender=user) | Q(receiver=user)
+        ).select_related('sender', 'receiver').order_by('thread_id', 'created_at')
 
     def perform_create(self, serializer):
         serializer.save(sender=self.request.user)
 
+    @action(detail=True, methods=['post'])
+    def mark_read(self, request, pk=None):
+        """Receiver marks a message as read."""
+        message = self.get_object()
+        if message.receiver != request.user:
+            raise PermissionDenied('You can only mark your own received messages as read.')
+        if not message.is_read:
+            message.is_read = True
+            message.read_at = timezone.now()
+            message.save(update_fields=['is_read', 'read_at'])
+        return Response({'status': 'marked as read'})
+
+
+# ── Notifications ─────────────────────────────────────────────────────────────
 
 class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Read-only. Notifications are system-generated only.
+    Users can mark as read via the `mark_read` action.
+    """
     permission_classes = [permissions.IsAuthenticated]
+    serializer_class = NotificationSerializer
 
     def get_queryset(self):
         return Notification.objects.filter(user=self.request.user)
+
+    @action(detail=True, methods=['post'])
+    def mark_read(self, request, pk=None):
+        notification = self.get_object()
+        if not notification.is_read:
+            notification.is_read = True
+            notification.save(update_fields=['is_read'])
+        return Response({'status': 'marked as read'})
+
+    @action(detail=False, methods=['post'])
+    def mark_all_read(self, request):
+        updated = Notification.objects.filter(
+            user=request.user, is_read=False
+        ).update(is_read=True)
+        return Response({'marked_read': updated})

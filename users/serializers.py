@@ -17,6 +17,11 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ['email', 'name', 'password', 'password_confirm', 'role', 'phone', 'locale']
+        
+    def validate_role(self, value):
+        if value == 'admin':
+            raise serializers.ValidationError('Invalid Role')
+        return value
 
     def validate(self, attrs):
         if attrs['password'] != attrs['password_confirm']:
@@ -49,6 +54,8 @@ class ChangePasswordSerializer(serializers.Serializer):
     def validate(self, attrs):
         if attrs['new_password'] != attrs['new_password_confirm']:
             raise serializers.ValidationError({'new_password': 'Passwords do not match'})
+        if attrs['old_password'] == attrs['new_password']:
+            raise serializers.ValidationError({'new_password': 'New password must differ from the old one.'})
         return attrs
 
     def save(self):
@@ -70,3 +77,12 @@ class TOTPVerifySerializer(serializers.Serializer):
         if not value.isdigit():
             raise serializers.ValidationError('Code must be 6 digits')
         return value
+    
+
+class PublicUserSerializer(serializers.ModelSerializer):
+    """
+    Minimal profile shown to other users (e.g. review author).
+    """
+    class Meta:
+        model = User
+        fields = ['id', 'name', 'avatar']
