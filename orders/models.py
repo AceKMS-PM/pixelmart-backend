@@ -1,3 +1,4 @@
+import uuid
 from django.db import models
 from django.conf import settings
 from common.models import TimeStampedModel
@@ -97,6 +98,7 @@ class Order(TimeStampedModel):
 
 
 class OrderItem(models.Model):
+    uuid = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='order_items')
     product = models.ForeignKey('products.Product', on_delete=models.PROTECT)
     variant = models.ForeignKey('products.ProductVariant', on_delete=models.PROTECT, null=True, blank=True)

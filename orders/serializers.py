@@ -8,11 +8,11 @@ class OrderItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = OrderItem
         fields = [
-            'id', 'product', 'variant',
+            'uuid', 'product', 'variant',
             'title', 'sku', 'image_url',
             'quantity', 'unit_price', 'total_price',
         ]
-        read_only_fields = ['id', 'total_price']
+        read_only_fields = ['uuid', 'total_price']
 
 
 # ── Order — customer view ─────────────────────────────────────────────────────
@@ -28,7 +28,7 @@ class OrderCustomerSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
         fields = [
-            'id', 'order_number', 'status', 'payment_status', 'payment_method',
+            'uuid', 'order_number', 'status', 'payment_status', 'payment_method',
             'items',
             'subtotal', 'shipping_amount', 'discount_amount', 'total_amount', 'currency',
             'shipping_address',
@@ -54,7 +54,7 @@ class OrderVendorSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
         fields = [
-            'id', 'order_number',
+            'uuid', 'order_number',
             'customer_name', 'customer_email',
             'status', 'payment_status', 'payment_method',
             'items',
@@ -65,7 +65,7 @@ class OrderVendorSerializer(serializers.ModelSerializer):
             'notes', 'created_at', 'updated_at',
         ]
         read_only_fields = [
-            'id', 'order_number', 'customer_name', 'customer_email',
+            'uuid', 'order_number', 'customer_name', 'customer_email',
             'payment_status', 'payment_method',
             'subtotal', 'shipping_amount', 'discount_amount',
             'total_amount', 'commission_amount', 'currency',
@@ -94,12 +94,12 @@ class CouponSerializer(serializers.ModelSerializer):
     class Meta:
         model = Coupon
         fields = [
-            'id', 'code', 'discount_type', 'value',
+            'uuid', 'code', 'discount_type', 'value',
             'min_order_amount', 'max_uses', 'max_uses_per_user', 'used_count',
             'applicable_to', 'starts_at', 'expires_at', 'is_active',
             'created_at',
         ]
-        read_only_fields = ['id', 'used_count', 'created_at']
+        read_only_fields = ['uuid', 'used_count', 'created_at']
 
 
 class CouponPublicSerializer(serializers.ModelSerializer):
@@ -125,10 +125,10 @@ class PayoutSerializer(serializers.ModelSerializer):
     class Meta:
         model = Payout
         fields = [
-            'id', 'amount', 'currency', 'method',
+            'uuid', 'amount', 'currency', 'method',
             'destination', 'status', 'processed_at', 'created_at',
         ]
-        read_only_fields = ['id', 'status', 'processed_at', 'created_at']
+        read_only_fields = ['uuid', 'status', 'processed_at', 'created_at']
 
 
 class PayoutAdminSerializer(serializers.ModelSerializer):

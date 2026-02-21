@@ -10,7 +10,7 @@ class PublicStoreSerializer(serializers.ModelSerializer):
     class Meta:
         model = Store
         fields = [
-            'id', 'owner_name', 'name', 'slug', 'description',
+            'uuid', 'owner_name', 'name', 'slug', 'description',
             'logo', 'banner', 'theme_id', 'primary_color',
             'subscription_tier', 'level', 'total_orders', 'avg_rating',
             'is_verified', 'country', 'currency', 'created_at',
@@ -24,14 +24,14 @@ class StoreSerializer(serializers.ModelSerializer):
     class Meta:
         model = Store
         fields = [
-            'id', 'owner', 'owner_name', 'name', 'slug', 'description',
+            'uuid', 'owner', 'owner_name', 'name', 'slug', 'description',
             'logo', 'banner', 'theme_id', 'primary_color', 'status',
             'subscription_tier', 'subscription_ends_at', 'balance',
             'pending_balance', 'level', 'total_orders', 'avg_rating',
             'is_verified', 'country', 'currency', 'created_at', 'updated_at',
         ]
         read_only_fields = [
-            'id', 'owner', 'slug', 'balance', 'pending_balance',
+            'uuid', 'owner', 'slug', 'balance', 'pending_balance',
             'level', 'total_orders', 'avg_rating', 'is_verified',
             'created_at', 'updated_at',
         ]

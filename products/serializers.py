@@ -24,8 +24,8 @@ class CategorySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Category
-        fields = ['id', 'name', 'slug', 'parent', 'icon', 'sort_order', 'is_active', 'children', 'created_at']
-        read_only_fields = ['id', 'slug', 'created_at']
+        fields = ['uuid', 'name', 'slug', 'parent', 'icon', 'sort_order', 'is_active', 'children', 'created_at']
+        read_only_fields = ['uuid', 'slug', 'created_at']
 
     def get_children(self, obj):
         return CategorySerializer(obj.children.filter(is_active=True), many=True).data
@@ -42,7 +42,7 @@ class ProductVariantPublicSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProductVariant
         fields = [
-            'id', 'title', 'options',
+            'uuid', 'title', 'options',
             'price', 'compare_price',
             'quantity', 'image', 'is_available',
         ]
@@ -53,10 +53,10 @@ class ProductVariantSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProductVariant
         fields = [
-            'id', 'title', 'options', 'price', 'compare_price',
+            'uuid', 'title', 'options', 'price', 'compare_price',
             'sku', 'quantity', 'image', 'weight', 'is_available', 'created_at',
         ]
-        read_only_fields = ['id', 'created_at']
+        read_only_fields = ['uuid', 'created_at']
 
 
 # ── Product — public list (lightest payload) ──────────────────────────────────
@@ -75,7 +75,7 @@ class ProductListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = [
-            'id', 'title', 'slug', 'short_description',
+            'uuid', 'title', 'slug', 'short_description',
             'store_name', 'store_slug', 'store_verified',
             'category_name', 'images', 'price', 'compare_price',
             'status', 'quantity', 'is_digital', 'created_at',
@@ -103,7 +103,7 @@ class ProductPublicSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = [
-            'id', 'store', 'store_name', 'store_slug', 'store_verified',
+            'uuid', 'store', 'store_name', 'store_slug', 'store_verified',
             'title', 'slug', 'description', 'short_description',
             'category', 'category_name', 'tags', 'images',
             'price', 'compare_price',
@@ -129,7 +129,7 @@ class ProductSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = [
-            'id', 'store', 'store_name', 'store_slug', 'store_verified',
+            'uuid', 'store', 'store_name', 'store_slug', 'store_verified',
             'title', 'slug', 'description', 'short_description',
             'category', 'category_name', 'tags', 'images',
             'price', 'compare_price', 'cost_price',
@@ -138,7 +138,7 @@ class ProductSerializer(serializers.ModelSerializer):
             'seo_title', 'seo_description', 'published_at',
             'variants', 'created_at', 'updated_at',
         ]
-        read_only_fields = ['id', 'slug', 'created_at', 'updated_at']
+        read_only_fields = ['uuid', 'slug', 'created_at', 'updated_at']
 
 
 # ── Product Create / Update ───────────────────────────────────────────────────

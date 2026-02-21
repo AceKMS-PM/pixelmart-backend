@@ -20,7 +20,7 @@ class ReviewPublicSerializer(serializers.ModelSerializer):
     class Meta:
         model = Review
         fields = [
-            'id', 'author',
+            'uuid', 'author',
             'rating', 'title', 'body', 'images',
             'is_verified',
             'vendor_reply', 'replied_at',
@@ -54,14 +54,14 @@ class ReviewVendorSerializer(serializers.ModelSerializer):
     class Meta:
         model = Review
         fields = [
-            'id', 'author',
+            'uuid', 'author',
             'rating', 'title', 'body', 'images',
             'is_verified', 'is_published',
             'vendor_reply', 'replied_at',
             'created_at',
         ]
         read_only_fields = [
-            'id', 'author', 'rating', 'title', 'body', 'images',
+            'uuid', 'author', 'rating', 'title', 'body', 'images',
             'is_verified', 'is_published', 'replied_at', 'created_at',
         ]
 
@@ -88,7 +88,7 @@ class MessageSerializer(serializers.ModelSerializer):
     class Meta:
         model = Message
         fields = [
-            'id', 'thread_id',
+            'uuid', 'thread_id',
             'sender', 'sender_name',
             'receiver', 'receiver_name',
             'order', 'store',
@@ -97,7 +97,7 @@ class MessageSerializer(serializers.ModelSerializer):
             'created_at',
         ]
         read_only_fields = [
-            'id', 'sender', 'sender_name', 'receiver_name',
+            'uuid', 'sender', 'sender_name', 'receiver_name',
             'is_read', 'read_at', 'created_at',
         ]
         # `is_auto` intentionally excluded from all client-facing fields
@@ -114,7 +114,7 @@ class NotificationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Notification
         fields = [
-            'id', 'notification_type',
+            'uuid', 'notification_type',
             'title', 'body', 'link',
             'is_read',
             'created_at',

@@ -30,6 +30,7 @@ class ReviewViewSet(viewsets.ModelViewSet):
     DELETE /reviews/{id}/    → admin only
     """
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+    lookup_field = 'uuid'
 
     def get_queryset(self):
         user = self.request.user
@@ -64,22 +65,22 @@ class ReviewViewSet(viewsets.ModelViewSet):
         if _role(user) != 'customer':
             raise PermissionDenied('Only customers can write reviews.')
 
-        product_id = self.request.data.get('product')
-        order_id = self.request.data.get('order')
+        product_uuid = self.request.data.get('product')
+        order_uuid = self.request.data.get('order')
 
         # Verify the customer actually ordered this product
         from orders.models import Order, OrderItem
         if not OrderItem.objects.filter(
             order__customer=user,
-            order_id=order_id,
-            product_id=product_id,
+            order__uuid=order_uuid,
+            product__uuid=product_uuid,
         ).exists():
             raise ValidationError('You can only review products you have purchased.')
 
         try:
             from products.models import Product
-            product = Product.objects.get(pk=product_id)
-            order = Order.objects.get(pk=order_id, customer=user)
+            product = Product.objects.get(uuid=product_uuid)
+            order = Order.objects.get(uuid=order_uuid, customer=user)
         except Exception:
             raise ValidationError('Invalid product or order.')
 
@@ -134,6 +135,7 @@ class MessageViewSet(
     """
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = MessageSerializer
+    lookup_field = 'uuid'
 
     def get_queryset(self):
         from django.db.models import Q
@@ -167,6 +169,7 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     """
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = NotificationSerializer
+    lookup_field = 'uuid'
 
     def get_queryset(self):
         return Notification.objects.filter(user=self.request.user)

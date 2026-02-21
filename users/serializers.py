@@ -6,8 +6,8 @@ from .models import User
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'email', 'name', 'avatar', 'role', 'phone', 'locale', 'is_2fa_enabled', 'is_verified', 'created_at']
-        read_only_fields = ['id', 'role', 'is_2fa_enabled', 'is_verified', 'created_at']
+        fields = ['uuid', 'email', 'name', 'avatar', 'role', 'phone', 'locale', 'is_2fa_enabled', 'is_verified', 'created_at']
+        read_only_fields = ['uuid', 'role', 'is_2fa_enabled', 'is_verified', 'created_at']
 
 
 class UserRegistrationSerializer(serializers.ModelSerializer):
@@ -85,4 +85,4 @@ class PublicUserSerializer(serializers.ModelSerializer):
     """
     class Meta:
         model = User
-        fields = ['id', 'name', 'avatar']
+        fields = ['uuid', 'name', 'avatar']

@@ -41,6 +41,7 @@ class OrderViewSet(
     inventory reservation, payment intent creation, and atomicity.
     """
     permission_classes = [permissions.IsAuthenticated]
+    lookup_field = 'uuid'
 
     def get_queryset(self):
         user = self.request.user
@@ -80,6 +81,7 @@ class CouponViewSet(viewsets.ModelViewSet):
     """Vendor-only — manages coupons for their store."""
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = CouponSerializer
+    lookup_field = 'uuid'
 
     def get_queryset(self):
         user = self.request.user
@@ -157,6 +159,7 @@ class PayoutViewSet(
     Admins see all payouts with full detail.
     """
     permission_classes = [permissions.IsAuthenticated]
+    lookup_field = 'uuid'
 
     def get_queryset(self):
         user = self.request.user
