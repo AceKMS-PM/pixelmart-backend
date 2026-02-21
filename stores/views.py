@@ -19,7 +19,7 @@ class IsStoreOwner(permissions.BasePermission):
 class StoreViewSet(viewsets.ModelViewSet):
     """Vendor-facing viewset — all operations require ownership."""
     permission_classes = [permissions.IsAuthenticated, IsStoreOwner]
-    lookup_field = 'uuid'
+    lookup_field = 'id'
 
     def get_queryset(self):
         # Vendors see only their own stores; admins see all
@@ -112,7 +112,7 @@ class PublicStoreViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         return Store.objects.filter(status='active').only(
-            'uuid', 'name', 'slug', 'description', 'logo', 'banner',
+            'id', 'name', 'slug', 'description', 'logo', 'banner',
             'theme_id', 'primary_color', 'subscription_tier',
             'level', 'total_orders', 'avg_rating', 'is_verified',
             'country', 'currency', 'created_at',

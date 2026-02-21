@@ -98,7 +98,11 @@ class Order(TimeStampedModel):
 
 
 class OrderItem(models.Model):
-    uuid = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    """
+    OrderItem does NOT inherit TimeStampedModel, but still uses UUID as PK
+    for consistency with the rest of the codebase.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='order_items')
     product = models.ForeignKey('products.Product', on_delete=models.PROTECT)
     variant = models.ForeignKey('products.ProductVariant', on_delete=models.PROTECT, null=True, blank=True)

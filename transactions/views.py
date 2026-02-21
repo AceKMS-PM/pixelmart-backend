@@ -10,7 +10,7 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
     Admins: see all transactions with full detail.
     """
     permission_classes = [permissions.IsAuthenticated]
-    lookup_field = 'uuid'
+    lookup_field = 'id'
 
     def get_queryset(self):
         user = self.request.user

@@ -8,11 +8,11 @@ class OrderItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = OrderItem
         fields = [
-            'uuid', 'product', 'variant',
+            'id', 'product', 'variant',
             'title', 'sku', 'image_url',
             'quantity', 'unit_price', 'total_price',
         ]
-        read_only_fields = ['uuid', 'total_price']
+        read_only_fields = ['id', 'total_price']
 
 
 # ── Order — customer view ─────────────────────────────────────────────────────
@@ -21,14 +21,14 @@ class OrderCustomerSerializer(serializers.ModelSerializer):
     """
     Returned to the customer who placed the order.
     EXCLUDED: commission_amount (internal), payment_reference (sensitive),
-              billing_address (only shown on invoice endpoint).
+              billing_address (invoice endpoint only).
     """
     items = OrderItemSerializer(source='order_items', many=True, read_only=True)
 
     class Meta:
         model = Order
         fields = [
-            'uuid', 'order_number', 'status', 'payment_status', 'payment_method',
+            'id', 'order_number', 'status', 'payment_status', 'payment_method',
             'items',
             'subtotal', 'shipping_amount', 'discount_amount', 'total_amount', 'currency',
             'shipping_address',
@@ -45,7 +45,6 @@ class OrderVendorSerializer(serializers.ModelSerializer):
     Returned to the vendor who owns the store.
     Adds: customer name + email (needed for fulfilment), commission_amount.
     EXCLUDED: full billing_address (privacy), payment_reference (no need).
-    Customer phone is excluded — vendors don't need it for digital orders.
     """
     customer_name = serializers.CharField(source='customer.name', read_only=True)
     customer_email = serializers.EmailField(source='customer.email', read_only=True)
@@ -54,7 +53,7 @@ class OrderVendorSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
         fields = [
-            'uuid', 'order_number',
+            'id', 'order_number',
             'customer_name', 'customer_email',
             'status', 'payment_status', 'payment_method',
             'items',
@@ -65,7 +64,7 @@ class OrderVendorSerializer(serializers.ModelSerializer):
             'notes', 'created_at', 'updated_at',
         ]
         read_only_fields = [
-            'uuid', 'order_number', 'customer_name', 'customer_email',
+            'id', 'order_number', 'customer_name', 'customer_email',
             'payment_status', 'payment_method',
             'subtotal', 'shipping_amount', 'discount_amount',
             'total_amount', 'commission_amount', 'currency',
@@ -89,24 +88,23 @@ class OrderAdminSerializer(serializers.ModelSerializer):
 class CouponSerializer(serializers.ModelSerializer):
     """
     Vendor-facing coupon management.
-    EXCLUDED: used_count is read-only (never client-writable).
+    used_count is read-only — never client-writable.
     """
     class Meta:
         model = Coupon
         fields = [
-            'uuid', 'code', 'discount_type', 'value',
+            'id', 'code', 'discount_type', 'value',
             'min_order_amount', 'max_uses', 'max_uses_per_user', 'used_count',
             'applicable_to', 'starts_at', 'expires_at', 'is_active',
             'created_at',
         ]
-        read_only_fields = ['uuid', 'used_count', 'created_at']
+        read_only_fields = ['id', 'used_count', 'created_at']
 
 
 class CouponPublicSerializer(serializers.ModelSerializer):
     """
     Returned to customers on coupon validation.
-    EXCLUDED: used_count, max_uses, store internals — they're not needed
-              and could leak business intelligence.
+    EXCLUDED: used_count, max_uses, store internals.
     """
     class Meta:
         model = Coupon
@@ -118,17 +116,15 @@ class CouponPublicSerializer(serializers.ModelSerializer):
 class PayoutSerializer(serializers.ModelSerializer):
     """
     Vendor-facing payout history.
-    EXCLUDED: failure_reason shown only to admin; external_ref is internal.
-    `destination` is stored as JSON (bank / mobile money details) — shown
-    only to the store owner since get_queryset already enforces ownership.
+    EXCLUDED: failure_reason (admin only), external_ref (internal).
     """
     class Meta:
         model = Payout
         fields = [
-            'uuid', 'amount', 'currency', 'method',
+            'id', 'amount', 'currency', 'method',
             'destination', 'status', 'processed_at', 'created_at',
         ]
-        read_only_fields = ['uuid', 'status', 'processed_at', 'created_at']
+        read_only_fields = ['id', 'status', 'processed_at', 'created_at']
 
 
 class PayoutAdminSerializer(serializers.ModelSerializer):

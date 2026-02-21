@@ -11,7 +11,7 @@ urlpatterns = [
     path('<slug:product_slug>/variants/', ProductVariantViewSet.as_view({
         'get': 'list', 'post': 'create'
     }), name='product-variants'),
-    path('<slug:product_slug>/variants/<uuid:uuid>/', ProductVariantViewSet.as_view({
+    path('<slug:product_slug>/variants/<uuid:id>/', ProductVariantViewSet.as_view({
         'get': 'retrieve', 'put': 'update', 'patch': 'partial_update', 'delete': 'destroy'
     }), name='product-variant-detail'),
 ]

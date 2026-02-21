@@ -1,7 +1,7 @@
 from rest_framework import viewsets, mixins, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError, NotFound
 from django.utils import timezone
 
 from .models import Review, Message, Notification
@@ -23,14 +23,14 @@ def _role(user):
 
 class ReviewViewSet(viewsets.ModelViewSet):
     """
-    GET  /reviews/           → public (only published reviews)
+    GET  /reviews/           → public (published only)
     GET  /reviews/{id}/      → public
     POST /reviews/           → authenticated customer (must have ordered the product)
     PATCH /reviews/{id}/     → vendor (reply only) OR admin (all fields)
     DELETE /reviews/{id}/    → admin only
     """
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
-    lookup_field = 'uuid'
+    lookup_field = 'id'
 
     def get_queryset(self):
         user = self.request.user
@@ -40,12 +40,12 @@ class ReviewViewSet(viewsets.ModelViewSet):
             return Review.objects.select_related('customer', 'product', 'store').all()
 
         if role == 'vendor':
-            # Vendors see all reviews on their store products (incl. unpublished, for moderation)
+            # Vendors see all reviews on their store (incl. unpublished, for moderation)
             return Review.objects.select_related('customer', 'product', 'store').filter(
                 store__owner=user
             )
 
-        # Public / customer: only published reviews
+        # Public / customer: published reviews only
         return Review.objects.select_related('customer', 'product', 'store').filter(
             is_published=True
         )
@@ -56,7 +56,7 @@ class ReviewViewSet(viewsets.ModelViewSet):
             return ReviewAdminSerializer
         if role == 'vendor':
             return ReviewVendorSerializer
-        if self.action in ['create']:
+        if self.action == 'create':
             return ReviewCreateSerializer
         return ReviewPublicSerializer
 
@@ -65,22 +65,24 @@ class ReviewViewSet(viewsets.ModelViewSet):
         if _role(user) != 'customer':
             raise PermissionDenied('Only customers can write reviews.')
 
-        product_uuid = self.request.data.get('product')
-        order_uuid = self.request.data.get('order')
+        # These are UUIDs (now used as PKs directly)
+        product_id = self.request.data.get('product')
+        order_id = self.request.data.get('order')
+
+        from orders.models import Order, OrderItem
+        from products.models import Product
 
         # Verify the customer actually ordered this product
-        from orders.models import Order, OrderItem
         if not OrderItem.objects.filter(
             order__customer=user,
-            order__uuid=order_uuid,
-            product__uuid=product_uuid,
+            order__id=order_id,
+            product__id=product_id,
         ).exists():
             raise ValidationError('You can only review products you have purchased.')
 
         try:
-            from products.models import Product
-            product = Product.objects.get(uuid=product_uuid)
-            order = Order.objects.get(uuid=order_uuid, customer=user)
+            product = Product.objects.get(id=product_id)
+            order = Order.objects.get(id=order_id, customer=user)
         except Exception:
             raise ValidationError('Invalid product or order.')
 
@@ -99,14 +101,12 @@ class ReviewViewSet(viewsets.ModelViewSet):
             raise PermissionDenied('Customers cannot edit reviews after submission.')
 
         if role == 'vendor':
-            # Vendors can only set vendor_reply on their own store's reviews
             if review.store.owner != request.user:
                 raise PermissionDenied('You can only reply to reviews on your own store.')
             allowed_fields = {'vendor_reply'}
             disallowed = set(request.data.keys()) - allowed_fields
             if disallowed:
                 raise PermissionDenied(f'Vendors may only set: {allowed_fields}.')
-            # Auto-stamp replied_at
             review.vendor_reply = request.data.get('vendor_reply', review.vendor_reply)
             review.replied_at = timezone.now()
             review.save(update_fields=['vendor_reply', 'replied_at'])
@@ -130,61 +130,61 @@ class MessageViewSet(
     viewsets.GenericViewSet,
 ):
     """
-    Messages are immutable after sending (no update/delete for users).
+    Messages are immutable after sending (no update/delete).
     Sender is always request.user — never from request body.
     """
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = MessageSerializer
-    lookup_field = 'uuid'
+    lookup_field = 'id'
 
     def get_queryset(self):
-        from django.db.models import Q
         user = self.request.user
+        if _role(user) == 'admin':
+            return Message.objects.select_related('sender', 'receiver').all()
         return Message.objects.filter(
-            Q(sender=user) | Q(receiver=user)
-        ).select_related('sender', 'receiver').order_by('thread_id', 'created_at')
+            sender=user
+        ).union(
+            Message.objects.filter(receiver=user)
+        ).order_by('-created_at')
 
     def perform_create(self, serializer):
         serializer.save(sender=self.request.user)
 
     @action(detail=True, methods=['post'])
-    def mark_read(self, request, pk=None):
-        """Receiver marks a message as read."""
+    def mark_read(self, request, id=None):
         message = self.get_object()
         if message.receiver != request.user:
-            raise PermissionDenied('You can only mark your own received messages as read.')
+            raise PermissionDenied('You can only mark your own messages as read.')
         if not message.is_read:
             message.is_read = True
             message.read_at = timezone.now()
             message.save(update_fields=['is_read', 'read_at'])
-        return Response({'status': 'marked as read'})
+        return Response(MessageSerializer(message).data)
 
 
 # ── Notifications ─────────────────────────────────────────────────────────────
 
-class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
-    """
-    Read-only. Notifications are system-generated only.
-    Users can mark as read via the `mark_read` action.
-    """
+class NotificationViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Notifications are server-generated — clients can only read and mark as read."""
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = NotificationSerializer
-    lookup_field = 'uuid'
+    lookup_field = 'id'
 
     def get_queryset(self):
         return Notification.objects.filter(user=self.request.user)
 
     @action(detail=True, methods=['post'])
-    def mark_read(self, request, pk=None):
-        notification = self.get_object()
-        if not notification.is_read:
-            notification.is_read = True
-            notification.save(update_fields=['is_read'])
-        return Response({'status': 'marked as read'})
+    def mark_read(self, request, id=None):
+        notif = self.get_object()
+        notif.is_read = True
+        notif.save(update_fields=['is_read'])
+        return Response(NotificationSerializer(notif).data)
 
     @action(detail=False, methods=['post'])
     def mark_all_read(self, request):
-        updated = Notification.objects.filter(
-            user=request.user, is_read=False
-        ).update(is_read=True)
-        return Response({'marked_read': updated})
+        self.get_queryset().filter(is_read=False).update(is_read=True)
+        return Response({'message': 'All notifications marked as read.'})

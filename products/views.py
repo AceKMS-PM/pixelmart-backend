@@ -151,7 +151,7 @@ class ProductVariantViewSet(viewsets.ModelViewSet):
     Write: owner only.
     """
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
-    lookup_field = 'uuid'
+    lookup_field = 'id'
 
     def _get_product(self):
         try:

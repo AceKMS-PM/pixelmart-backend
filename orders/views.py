@@ -17,8 +17,6 @@ from .serializers import (
 from stores.models import Store
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
 def _role(user):
     return getattr(user, 'role', 'customer')
 
@@ -28,7 +26,7 @@ def _role(user):
 class OrderViewSet(
     mixins.RetrieveModelMixin,
     mixins.ListModelMixin,
-    mixins.UpdateModelMixin,  # vendors update status/tracking; customers cannot
+    mixins.UpdateModelMixin,
     viewsets.GenericViewSet,
 ):
     """
@@ -36,12 +34,11 @@ class OrderViewSet(
     Vendors: list + retrieve store orders, update status/tracking.
     Admins: full access.
 
-    NOTE: Order *creation* is intentionally excluded here.
-    It will live in a dedicated checkout endpoint that handles
-    inventory reservation, payment intent creation, and atomicity.
+    Order creation lives in a separate atomic checkout endpoint
+    (payment intent + inventory reserve + order create).
     """
     permission_classes = [permissions.IsAuthenticated]
-    lookup_field = 'uuid'
+    lookup_field = 'id'
 
     def get_queryset(self):
         user = self.request.user
@@ -51,7 +48,6 @@ class OrderViewSet(
             return qs
         if role == 'vendor':
             return qs.filter(store__owner=user)
-        # customer
         return qs.filter(customer=user)
 
     def get_serializer_class(self):
@@ -63,7 +59,6 @@ class OrderViewSet(
         return OrderCustomerSerializer
 
     def update(self, request, *args, **kwargs):
-        # Customers must never be able to call PATCH/PUT on orders
         if _role(request.user) == 'customer':
             raise PermissionDenied('Customers cannot modify orders.')
         return super().update(request, *args, **kwargs)
@@ -81,13 +76,12 @@ class CouponViewSet(viewsets.ModelViewSet):
     """Vendor-only — manages coupons for their store."""
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = CouponSerializer
-    lookup_field = 'uuid'
+    lookup_field = 'id'
 
     def get_queryset(self):
         user = self.request.user
         if _role(user) == 'admin':
             return Coupon.objects.all()
-        # Vendors see only their own store coupons
         return Coupon.objects.filter(store__owner=user)
 
     def perform_create(self, serializer):
@@ -101,65 +95,65 @@ class CouponViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated])
     def validate(self, request):
         """
-        Public-ish endpoint for checkout: validate a coupon code.
-        Returns only the discount info — not internal coupon config.
-        Timing-safe: always runs the same DB query regardless of outcome.
+        Checkout: validate a coupon code and return discount info only.
+        Does not expose internal coupon config (used_count, max_uses, etc.).
         """
         code = request.data.get('code', '').strip().upper()
-        store_id = request.data.get('store_id')
-        cart_total = int(request.data.get('cart_total', 0))
-
-        invalid_response = Response(
-            {'valid': False, 'reason': 'INVALID_CODE'},
-            status=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        )
+        cart_total = request.data.get('cart_total', 0)
+        now = timezone.now()
 
         try:
-            coupon = Coupon.objects.get(code=code, store_id=store_id, is_active=True)
+            coupon = Coupon.objects.get(code=code, is_active=True)
         except Coupon.DoesNotExist:
-            return invalid_response
+            return Response({'error': 'Invalid or inactive coupon.'}, status=status.HTTP_404_NOT_FOUND)
 
-        now = timezone.now()
         if coupon.starts_at and coupon.starts_at > now:
-            return invalid_response  # not yet active — same generic error (no info leak)
+            return Response({'error': 'This coupon is not yet active.'}, status=status.HTTP_400_BAD_REQUEST)
+
         if coupon.expires_at and coupon.expires_at < now:
-            return Response({'valid': False, 'reason': 'COUPON_EXPIRED'},
-                            status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+            return Response({'error': 'This coupon has expired.'}, status=status.HTTP_400_BAD_REQUEST)
+
         if coupon.max_uses and coupon.used_count >= coupon.max_uses:
-            return Response({'valid': False, 'reason': 'MAX_USES_REACHED'},
-                            status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+            return Response({'error': 'This coupon has reached its usage limit.'}, status=status.HTTP_400_BAD_REQUEST)
+
         if coupon.min_order_amount and cart_total < coupon.min_order_amount:
-            return Response({'valid': False, 'reason': 'MIN_ORDER_NOT_MET'},
-                            status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+            return Response(
+                {'error': f'Minimum order amount is {coupon.min_order_amount} cents.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if coupon.discount_type == 'percentage':
             discount_amount = int(cart_total * coupon.value / 100)
+        elif coupon.discount_type == 'fixed_amount':
+            discount_amount = coupon.value
         else:
-            discount_amount = min(coupon.value, cart_total)  # never negative total
+            discount_amount = 0
+
+        # Cap discount — never go negative
+        discount_amount = min(discount_amount, cart_total)
+        new_total = cart_total - discount_amount
 
         return Response({
-            'valid': True,
+            'coupon': CouponPublicSerializer(coupon).data,
             'discount_amount': discount_amount,
-            'discount_type': coupon.discount_type,
-            'new_total': cart_total - discount_amount,
+            'new_total': new_total,
         })
 
 
 # ── Payouts ───────────────────────────────────────────────────────────────────
 
 class PayoutViewSet(
+    mixins.CreateModelMixin,
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
-    mixins.CreateModelMixin,
     viewsets.GenericViewSet,
 ):
     """
-    Vendors request payouts (POST) and view history (GET).
-    Update / delete are not allowed — payouts are immutable once created.
+    Vendors create payout requests. Update/delete not allowed — payouts are immutable.
     Admins see all payouts with full detail.
     """
     permission_classes = [permissions.IsAuthenticated]
-    lookup_field = 'uuid'
+    lookup_field = 'id'
 
     def get_queryset(self):
         user = self.request.user

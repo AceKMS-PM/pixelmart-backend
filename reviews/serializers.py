@@ -9,18 +9,17 @@ class ReviewPublicSerializer(serializers.ModelSerializer):
     """
     Shown publicly on a product page.
     EXCLUDED:
-      - `flagged` (internal moderation flag — leaks moderation state)
-      - `is_published` (internal)
-      - `is_verified` can stay — it's a trust signal customers value
-      - `customer` shown as minimal public profile (name + avatar only)
-      - `order` ID excluded — customers shouldn't see each other's order IDs
+      - flagged (internal moderation flag)
+      - is_published (internal)
+      - order ID (customers shouldn't see each other's order IDs)
+      - customer shown as minimal public profile (name + avatar only)
     """
     author = PublicUserSerializer(source='customer', read_only=True)
 
     class Meta:
         model = Review
         fields = [
-            'uuid', 'author',
+            'id', 'author',
             'rating', 'title', 'body', 'images',
             'is_verified',
             'vendor_reply', 'replied_at',
@@ -31,8 +30,8 @@ class ReviewPublicSerializer(serializers.ModelSerializer):
 class ReviewCreateSerializer(serializers.ModelSerializer):
     """
     Used when a customer POSTs a new review.
-    `product`, `order`, `customer`, `store` are injected server-side — never from client.
-    `is_published`, `is_verified`, `flagged`, `vendor_reply` are all server-controlled.
+    product, order, customer, store are injected server-side — never from client.
+    is_published, is_verified, flagged, vendor_reply are all server-controlled.
     """
     class Meta:
         model = Review
@@ -47,21 +46,21 @@ class ReviewCreateSerializer(serializers.ModelSerializer):
 class ReviewVendorSerializer(serializers.ModelSerializer):
     """
     Vendor replying to a review on their store.
-    Can ONLY set vendor_reply. Everything else is read-only.
+    Can ONLY write vendor_reply. Everything else is read-only.
     """
     author = PublicUserSerializer(source='customer', read_only=True)
 
     class Meta:
         model = Review
         fields = [
-            'uuid', 'author',
+            'id', 'author',
             'rating', 'title', 'body', 'images',
             'is_verified', 'is_published',
             'vendor_reply', 'replied_at',
             'created_at',
         ]
         read_only_fields = [
-            'uuid', 'author', 'rating', 'title', 'body', 'images',
+            'id', 'author', 'rating', 'title', 'body', 'images',
             'is_verified', 'is_published', 'replied_at', 'created_at',
         ]
 
@@ -78,9 +77,9 @@ class ReviewAdminSerializer(serializers.ModelSerializer):
 class MessageSerializer(serializers.ModelSerializer):
     """
     Inbox / outbox messages.
-    `sender` is read-only (injected from request.user in perform_create).
-    `is_auto` is server-only — never let clients set it.
-    `read_at` is set server-side when the receiver reads.
+    sender injected from request.user in perform_create.
+    is_auto is server-only — never exposed to clients.
+    read_at set server-side when receiver reads.
     """
     sender_name = serializers.CharField(source='sender.name', read_only=True)
     receiver_name = serializers.CharField(source='receiver.name', read_only=True)
@@ -88,7 +87,7 @@ class MessageSerializer(serializers.ModelSerializer):
     class Meta:
         model = Message
         fields = [
-            'uuid', 'thread_id',
+            'id', 'thread_id',
             'sender', 'sender_name',
             'receiver', 'receiver_name',
             'order', 'store',
@@ -97,10 +96,10 @@ class MessageSerializer(serializers.ModelSerializer):
             'created_at',
         ]
         read_only_fields = [
-            'uuid', 'sender', 'sender_name', 'receiver_name',
+            'id', 'sender', 'sender_name', 'receiver_name',
             'is_read', 'read_at', 'created_at',
         ]
-        # `is_auto` intentionally excluded from all client-facing fields
+        # is_auto intentionally excluded from all client-facing fields
 
 
 # ── Notification ──────────────────────────────────────────────────────────────
@@ -108,13 +107,13 @@ class MessageSerializer(serializers.ModelSerializer):
 class NotificationSerializer(serializers.ModelSerializer):
     """
     User notifications — read-only from client perspective.
-    EXCLUDED: `channels`, `sent_via` (delivery internals), `metadata` (may contain
+    EXCLUDED: channels, sent_via (delivery internals), metadata (may contain
     internal IDs from payment providers or webhooks).
     """
     class Meta:
         model = Notification
         fields = [
-            'uuid', 'notification_type',
+            'id', 'notification_type',
             'title', 'body', 'link',
             'is_read',
             'created_at',

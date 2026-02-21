@@ -1,3 +1,4 @@
+import uuid
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
 from common.models import TimeStampedModel
@@ -22,30 +23,46 @@ class UserManager(BaseUserManager):
 
 
 class User(AbstractUser, TimeStampedModel):
+    """
+    Custom user model.
+
+    UUID PK note:
+    AbstractUser ships with its own integer `id` field. To override it with
+    UUID we explicitly redefine `id` here. This takes precedence over both
+    AbstractUser and TimeStampedModel. The separate `uuid` field from
+    TimeStampedModel is NOT inherited — only `created_at` and `updated_at` are.
+
+    This means the JWT token_blacklist tables (OutstandingToken) that reference
+    the user PK will store UUIDs — SimpleJWT handles this transparently.
+    """
+
+    # Override the PK from AbstractUser with UUID
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
     ROLE_CHOICES = [
         ('admin', 'Admin'),
         ('vendor', 'Vendor'),
         ('customer', 'Customer'),
     ]
-    
+
     AUTH_PROVIDER_CHOICES = [
         ('email', 'Email'),
         ('google', 'Google'),
         ('facebook', 'Facebook'),
     ]
-    
+
     username = None
     email = models.EmailField(unique=True)
     name = models.CharField(max_length=255)
     avatar = models.ImageField(upload_to='avatars/', null=True, blank=True)
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='customer')
     auth_provider = models.CharField(max_length=20, choices=AUTH_PROVIDER_CHOICES, default='email')
-    
+
     is_2fa_enabled = models.BooleanField(default=False)
     totp_secret = models.CharField(max_length=255, null=True, blank=True)
     is_verified = models.BooleanField(default=False)
     is_banned = models.BooleanField(default=False)
-    
+
     last_login_at = models.DateTimeField(null=True, blank=True)
     locale = models.CharField(max_length=5, default='fr')
     phone = models.CharField(max_length=20, null=True, blank=True)
