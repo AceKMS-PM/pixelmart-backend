@@ -205,7 +205,7 @@ class PayoutViewSet(
         amount = serializer.validated_data.get('amount', 0)
 
         if amount < min_amount:
-            raise ValidationError({'amount': f'Minimum payout is {min_amount} cents.'})
+            raise ValidationError({'amount': f'Minimum payout is {min_amount} XOF.'})
 
         if store.balance < amount:
             raise ValidationError({'amount': 'Insufficient balance.'})

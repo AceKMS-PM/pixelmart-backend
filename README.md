@@ -39,7 +39,7 @@ PixelMart is an **AI-powered African marketplace** where vendors open digital st
 **Core business rules hardcoded in the API:**
 - One store per vendor — enforced server-side, raises `403` if violated
 - Vendors must have 2FA enabled before requesting a payout — enforced at every payout creation
-- All monetary values are integers in **centimes** — €1.00 = 100, never use floats for money
+- All monetary values are integers in **XOF** (West African CFA franc) — no subdivisions, 1 XOF = 1 unit, never use floats for money
 - Reviews require a verified purchase — enforced via `OrderItem` existence check
 - Order *creation* is not implemented yet — it requires a dedicated atomic checkout endpoint
 - Transactions are immutable — no UPDATE ever; errors use a `reversal` transaction
@@ -463,7 +463,7 @@ Response: {
 
 ```
 GET /api/v1/stores/my/{id}/balance/
-Response: { available: int (centimes), pending: int (centimes), currency: str }
+Response: { available: int (XOF), pending: int (XOF), currency: str }
 ```
 
 #### Manage Products
@@ -548,7 +548,7 @@ PATCH /api/v1/orders/{id}/
 ```
 POST /api/v1/orders/payouts/
 Requires: vendor with is_2fa_enabled=True
-Body: { store_slug, amount (centimes), currency, method, destination }
+Body: { store_slug, amount (XOF), currency, method, destination }
 
 Server — validations (in order):
   1. role == 'vendor' → else 403
@@ -556,7 +556,7 @@ Server — validations (in order):
   3. Store.objects.get(slug=store_slug, owner=user) → else 422
   4. Payout.objects.filter(store=store, status='processing').exists()
      → if True: 422 'A payout is already being processed.'
-  5. amount >= MIN_PAYOUT_AMOUNT (default 100 centimes = €1) → else 422
+  5. amount >= MIN_PAYOUT_AMOUNT (default 500 XOF) → else 422
   6. store.balance >= amount → else 422 'Insufficient balance.'
 
 Server — atomic creation (db_transaction.atomic()):
@@ -844,8 +844,8 @@ The payout flow is the only one currently implemented end-to-end:
 
 ```
 Payout creation (atomic):
-  balance_before = store.balance          (e.g. 15000 centimes = €150)
-  balance_after  = balance_before - amount (e.g. 15000 - 10000 = 5000 centimes)
+  balance_before = store.balance          (e.g. 15000 XOF)
+  balance_after  = balance_before - amount (e.g. 15000 - 10000 = 5000 XOF)
 
   Transaction record:
     type=payout, direction=debit
@@ -1144,7 +1144,7 @@ class ReviewPublicSerializer(serializers.ModelSerializer):
 
 ### Data Access Rules
 
-7. **All monetary amounts are integers in centimes.** €1.00 = 100. Never store or compute money as floats.
+7. **All monetary amounts are integers in XOF.** No subdivisions. Never store or compute money as floats.
 8. **Transactions are immutable.** No `UPDATE` on the transactions table. Ever. Use a `reversal` transaction for corrections.
 9. **Vendors cannot see other stores' data.** Every `get_queryset()` filters by `store__owner=user` for non-admins.
 10. **`payment_reference` is admin-only.** Never include it in customer or vendor serializers.
@@ -1306,8 +1306,8 @@ CORS_ALLOWED_ORIGINS=https://yourdomain.com
 # ACCESS_TOKEN_LIFETIME=60 minutes
 # REFRESH_TOKEN_LIFETIME=7 days
 
-# Payout — optional, default 100 centimes (€1)
-# MIN_PAYOUT_AMOUNT=100
+# Payout — optional, default 500 XOF
+# MIN_PAYOUT_AMOUNT=500
 
 # Stripe — optional during dev, required for payments
 STRIPE_SECRET_KEY=sk_test_xxx

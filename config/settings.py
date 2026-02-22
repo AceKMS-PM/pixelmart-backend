@@ -165,7 +165,7 @@ COMMISSION_RATES = {
     'business': 200,
 }
 
-# Minimum payout amount in cents (100 = €1)
-MIN_PAYOUT_AMOUNT = 100
+# Minimum payout amount in XOF (500 XOF ≈ €0.76)
+MIN_PAYOUT_AMOUNT = 500
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
