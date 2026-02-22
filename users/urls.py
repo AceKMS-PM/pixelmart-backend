@@ -3,7 +3,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
     RegisterView, LoginView, Login2FAView, ProfileView,
     ChangePasswordView, TOTPSetupView, TOTPVerifyView,
-    TOTPDisableView, LogoutView,
+    TOTPDisableView, LogoutView, DeleteAccountView,
 )
 
 urlpatterns = [
@@ -17,6 +17,7 @@ urlpatterns = [
     # ── Profile ────────────────────────────────────────────────
     path('me/',          ProfileView.as_view(),     name='profile'),
     path('me/password/', ChangePasswordView.as_view(), name='change-password'),
+    path('me/delete/',   DeleteAccountView.as_view(),  name='delete-account'),
 
     # ── 2FA ───────────────────────────────────────────────────
     # All three are POST — setup mutates state (generates + stores secret),

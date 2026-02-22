@@ -2,6 +2,7 @@ import uuid
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
 from common.models import TimeStampedModel
+from common.encryption import encrypt, decrypt
 
 
 class UserManager(BaseUserManager):
@@ -59,9 +60,11 @@ class User(AbstractUser, TimeStampedModel):
     auth_provider = models.CharField(max_length=20, choices=AUTH_PROVIDER_CHOICES, default='email')
 
     is_2fa_enabled = models.BooleanField(default=False)
-    totp_secret = models.CharField(max_length=255, null=True, blank=True)
+    _totp_secret_encrypted = models.TextField(db_column='totp_secret', null=True, blank=True)
     is_verified = models.BooleanField(default=False)
     is_banned = models.BooleanField(default=False)
+
+    deleted_at = models.DateTimeField(null=True, blank=True)
 
     last_login_at = models.DateTimeField(null=True, blank=True)
     locale = models.CharField(max_length=5, default='fr')
@@ -74,6 +77,19 @@ class User(AbstractUser, TimeStampedModel):
 
     def __str__(self):
         return self.email
+
+    @property
+    def totp_secret(self):
+        """Decrypt and return the TOTP secret."""
+        return decrypt(self._totp_secret_encrypted or '')
+
+    @totp_secret.setter
+    def totp_secret(self, value: str | None):
+        """Encrypt and store the TOTP secret."""
+        if value:
+            self._totp_secret_encrypted = encrypt(value)
+        else:
+            self._totp_secret_encrypted = None
 
     @property
     def is_vendor(self):

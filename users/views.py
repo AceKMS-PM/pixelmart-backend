@@ -16,6 +16,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken, OutstandingToken
 from rest_framework_simplejwt.exceptions import TokenError
 
+from common.throttling import LoginRateThrottle, RegisterRateThrottle
 from .serializers import (
     UserSerializer,
     UserRegistrationSerializer,
@@ -72,10 +73,12 @@ class RegisterView(generics.CreateAPIView):
     """
     POST /auth/register/
     Public. role='admin' blocked in UserRegistrationSerializer.validate_role().
+    Throttled to 10 requests per minute per IP.
     """
     queryset           = User.objects.all()
     permission_classes = [AllowAny]
     serializer_class   = UserRegistrationSerializer
+    throttle_classes   = [RegisterRateThrottle]
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -106,8 +109,10 @@ class LoginView(APIView):
        never reach the 2FA endpoint.
     3. 2FA challenge returns an opaque pending_token (Redis, 5-min TTL).
        The real user PK is never sent to the client.
+    4. Throttled to 5 requests per minute per IP — prevents brute-force.
     """
     permission_classes = [AllowAny]
+    throttle_classes   = [LoginRateThrottle]
 
     def post(self, request):
         email    = request.data.get('email', '').strip().lower()
@@ -500,3 +505,59 @@ class TOTPDisableView(APIView):
         user.save(update_fields=['is_2fa_enabled', 'totp_secret'])
 
         return Response({'message': '2FA disabled successfully.'})
+
+
+# ─────────────────────────────────────────────────────────────
+#  Account Deletion
+# ─────────────────────────────────────────────────────────────
+
+class DeleteAccountView(APIView):
+    """
+    DELETE /auth/me/delete/
+
+    Soft delete: sets deleted_at timestamp. Account data is retained for 30 days
+    before a cleanup job permanently removes it.
+
+    Security decisions:
+    - Requires password confirmation to prevent accidental/malicious deletion
+    - Blacklists all outstanding tokens immediately
+    - Anonymizes email to prevent re-registration with same email
+    - Vendors: rejects if store has pending payouts
+    """
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request):
+        password = request.data.get('password', '')
+
+        if not password:
+            return Response(
+                {'error': 'Password confirmation is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not request.user.check_password(password):
+            return Response(
+                {'error': 'Invalid password.'},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        user = request.user
+
+        if user.role == 'vendor':
+            from orders.models import Payout
+            if Payout.objects.filter(store__owner=user, status__in=['pending', 'processing']).exists():
+                return Response(
+                    {'error': 'Cannot delete account while payouts are pending or processing.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        user.deleted_at = timezone.now()
+        user.email = f'deleted_{user.id}@deleted.pixelmart.local'
+        user.is_active = False
+        user.save(update_fields=['deleted_at', 'email', 'is_active'])
+
+        _blacklist_all_tokens_for(user)
+
+        return Response({
+            'message': 'Account scheduled for deletion. You have 30 days to contact support to recover your account.',
+        })

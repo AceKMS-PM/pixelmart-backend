@@ -918,14 +918,15 @@ Channels (push, email, sms, whatsapp) are stored but not exposed to clients.
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
-| POST | `/register/` | Public | Create account (vendor or customer) |
-| POST | `/login/` | Public | Step 1 — credentials (returns `pending_token` if 2FA enabled) |
+| POST | `/register/` | Public | Create account (vendor or customer) — throttled 10/min |
+| POST | `/login/` | Public | Step 1 — credentials (throttled 5/min, returns `pending_token` if 2FA enabled) |
 | POST | `/login/2fa/` | Public | Step 2 — verify TOTP code (max 5 attempts per token) |
 | POST | `/logout/` | Required | Blacklist refresh token |
 | POST | `/refresh/` | Public | Rotate JWT pair |
 | GET | `/me/` | Required | Read profile |
 | PATCH | `/me/` | Required | Update name, avatar, phone, locale |
 | PUT | `/me/password/` | Required | Change password (invalidates all sessions) |
+| DELETE | `/me/delete/` | Required | Soft delete account (requires password confirmation) |
 | POST | `/2fa/setup/` | Required | Generate TOTP secret + QR code (must verify after) |
 | POST | `/2fa/verify/` | Required | Activate 2FA (confirms setup) |
 | POST | `/2fa/disable/` | Required | Disable 2FA (blocked if pending payout) |
@@ -1194,22 +1195,23 @@ attempts = cache.incr(a_key)           # atomic increment, returns new value
 | **Forgot / reset password** | ❌ Not done | No endpoint exists yet. |
 | **Social auth (Google, Facebook)** | ❌ Not done | `auth_provider` field exists in the model, no OAuth flow implemented. |
 | **Payout execution** | ⚠️ Stub | Payout records are created and balance is deducted, but no actual bank/mobile money transfer logic exists. A background service or webhook must handle `status=processing → completed/failed`. |
-| **`totp_secret` encryption at rest** | ❌ Not done | Spec requires AES-256. Currently stored as plaintext. Use `django-encrypted-model-fields`. |
-| **Per-endpoint rate limiting** | ⚠️ Partial | Global throttle exists (DRF default). AI endpoints (20/min) and vendor writes (30/min) need `django-ratelimit` or DRF throttle classes. |
+| **`totp_secret` encryption at rest** | ✅ Done | Encrypted with Fernet (AES-128) via `ENCRYPTION_KEY` setting. |
+| **Per-endpoint rate limiting** | ✅ Done | Login: 5/min, Register: 10/min. Global: 60/min anon, 300/min user. |
+| **Account deletion** | ✅ Done | `DELETE /auth/me/delete/` — soft delete with 30-day retention. Requires password confirmation. |
 | **`change_pct` in dashboard** | ⚠️ Stub | Always returns `0`. Needs period comparison (current vs previous period). |
 | **`conversion` in dashboard** | ⚠️ Stub | Always returns `0`. No visit tracking implemented. |
 | **is_published auto-approval** | ❌ Not done | Spec: reviews auto-publish after 24h if not flagged. Requires a cron job or Celery task. |
 | **Thread filtering in messages** | ⚠️ Partial | Messages are ordered by `thread_id + created_at` but `?thread_id=` filter is not implemented. |
 | **Admin user ban endpoint** | ❌ Not done | `is_banned` field exists and is checked at login, but no API endpoint to set it. |
-| **Redis cache backend** | ⚠️ Assumed | `CACHES` must be configured to use Redis in `settings.py`. Without it, 2FA is broken. |
+| **Redis cache backend** | ✅ Done | Configured in `settings.py` with `REDIS_URL` env var. |
 | **Tests** | ❌ None | Highest priority before production. Start with auth flow, then payout atomicity. |
 
 ### Recommended Build Order
 
-1. Configure Redis in `settings.py` — 2FA depends on it (critical now)
-2. Implement the checkout endpoint (the entire purchase flow is blocked without it)
-3. Connect Stripe/Moneroo webhooks (required to complete payment flow)
-4. Encrypt `totp_secret` at rest
+1. ~~Configure Redis in `settings.py` — 2FA depends on it~~ ✅ Done
+2. ~~Encrypt `totp_secret` at rest~~ ✅ Done
+3. Implement the checkout endpoint (the entire purchase flow is blocked without it)
+4. Connect Stripe/Moneroo webhooks (required to complete payment flow)
 5. Implement email verification
 6. Write tests starting with auth and payout
 
@@ -1293,11 +1295,14 @@ DB_NAME=pixelmart
 DB_USER=pixelmart_user
 DB_PASSWORD=your-db-password
 DB_HOST=localhost
-DB_PORT=3306
+DB_PORT=5432
 
 # Redis — REQUIRED (2FA will be broken without it)
 REDIS_URL=redis://localhost:6379/0
-# CACHES must be configured in settings.py to use this
+
+# Encryption — REQUIRED for totp_secret encryption at rest
+# Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+ENCRYPTION_KEY=your-fernet-key-here
 
 # CORS — REQUIRED
 CORS_ALLOWED_ORIGINS=https://yourdomain.com

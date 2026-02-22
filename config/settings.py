@@ -138,6 +138,9 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'anon': '60/min',
         'user': '300/min',
+        'login': '5/min',
+        'register': '10/min',
+        'password_reset': '3/min',
     },
 }
 
@@ -167,5 +170,8 @@ COMMISSION_RATES = {
 
 # Minimum payout amount in XOF (500 XOF ≈ €0.76)
 MIN_PAYOUT_AMOUNT = 500
+
+# Encryption key for sensitive fields (Fernet key - generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+ENCRYPTION_KEY = config('ENCRYPTION_KEY', default='')
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
