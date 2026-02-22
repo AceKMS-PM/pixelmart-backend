@@ -52,7 +52,7 @@ PixelMart is an **AI-powered African marketplace** where vendors open digital st
 ### Prerequisites
 
 - Python 3.11+
-- MySQL 8+
+- PostgreSQL 18
 - **Redis** — required, the 2FA login flow will fail silently without it
 
 ### Setup
@@ -919,86 +919,118 @@ Channels (push, email, sms, whatsapp) are stored but not exposed to clients.
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
 | POST | `/register/` | Public | Create account (vendor or customer) |
-| POST | `/login/` | Public | Step 1 — credentials |
-| POST | `/login/2fa/` | Public | Step 2 — TOTP code |
+| POST | `/login/` | Public | Step 1 — credentials (returns `pending_token` if 2FA enabled) |
+| POST | `/login/2fa/` | Public | Step 2 — verify TOTP code (max 5 attempts per token) |
 | POST | `/logout/` | Required | Blacklist refresh token |
 | POST | `/refresh/` | Public | Rotate JWT pair |
 | GET | `/me/` | Required | Read profile |
 | PATCH | `/me/` | Required | Update name, avatar, phone, locale |
 | PUT | `/me/password/` | Required | Change password (invalidates all sessions) |
-| POST | `/2fa/setup/` | Required | Generate secret + QR code |
-| POST | `/2fa/verify/` | Required | Activate 2FA |
+| POST | `/2fa/setup/` | Required | Generate TOTP secret + QR code (must verify after) |
+| POST | `/2fa/verify/` | Required | Activate 2FA (confirms setup) |
 | POST | `/2fa/disable/` | Required | Disable 2FA (blocked if pending payout) |
 
 ### Stores — `/api/v1/stores/`
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
-| GET | `/` | Public | List active stores |
+| GET | `/` | Public | List active stores (`PublicStoreSerializer`) |
 | GET | `/{slug}/` | Public | Public store detail (no financials) |
 | GET | `/my/` | Vendor | List own store |
-| POST | `/my/` | Vendor | Create store (max 1 per vendor) |
+| POST | `/my/` | Vendor | Create store (enforced: max 1 per vendor) |
 | GET | `/my/{id}/` | Vendor | Store detail with financials |
-| PUT/PATCH | `/my/{id}/` | Vendor | Update store info |
+| PUT | `/my/{id}/` | Vendor | Full update store info |
+| PATCH | `/my/{id}/` | Vendor | Partial update store info |
 | DELETE | `/my/{id}/` | Vendor | Close store |
-| GET | `/my/{id}/dashboard/` | Vendor | KPIs (period: today/week/month) |
-| GET | `/my/{id}/balance/` | Vendor | Current balance |
+| GET | `/my/{id}/dashboard/` | Vendor | KPIs (`?period=today\|week\|month`) |
+| GET | `/my/{id}/balance/` | Vendor | Current balance (available + pending) |
 
 ### Products — `/api/v1/products/`
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
-| GET | `/categories/` | Public | Category list (tree) |
-| POST/PUT/DELETE | `/categories/` | Admin | Manage categories |
-| GET | `/` | Public | Product list (active only, filtered) |
+| GET | `/categories/` | Public | Category list (tree structure) |
+| POST | `/categories/` | Admin | Create category |
+| GET | `/categories/{slug}/` | Public | Category detail |
+| PUT | `/categories/{slug}/` | Admin | Update category |
+| PATCH | `/categories/{slug}/` | Admin | Partial update category |
+| DELETE | `/categories/{slug}/` | Admin | Delete category |
+| GET | `/` | Public | Product list (active only, filterable) |
 | POST | `/` | Vendor | Create product |
 | GET | `/{slug}/` | Public | Product detail (role-aware serializer) |
-| PUT/PATCH | `/{slug}/` | Vendor (owner) | Update product |
+| PUT | `/{slug}/` | Vendor (owner) | Full update product |
+| PATCH | `/{slug}/` | Vendor (owner) | Partial update product |
 | DELETE | `/{slug}/` | Vendor (owner) | Delete product |
-| POST | `/{slug}/duplicate/` | Vendor (owner) | Duplicate as draft |
-| PATCH | `/{slug}/inventory/` | Vendor (owner) | Adjust stock quantity |
+| POST | `/{slug}/duplicate/` | Vendor (owner) | Duplicate product as draft (copies variants) |
+| PATCH | `/{slug}/inventory/` | Vendor (owner) | Adjust stock quantity directly |
 | GET | `/{slug}/variants/` | Public | List variants |
-| POST | `/{slug}/variants/` | Vendor (owner) | Add variant |
-| GET/PUT/PATCH/DELETE | `/{slug}/variants/{uuid}/` | Vendor (owner) | Manage variant |
+| POST | `/{slug}/variants/` | Vendor (owner) | Create variant |
+| GET | `/{slug}/variants/{uuid}/` | Vendor (owner) | Variant detail |
+| PUT | `/{slug}/variants/{uuid}/` | Vendor (owner) | Update variant |
+| PATCH | `/{slug}/variants/{uuid}/` | Vendor (owner) | Partial update variant |
+| DELETE | `/{slug}/variants/{uuid}/` | Vendor (owner) | Delete variant |
 
 ### Orders — `/api/v1/orders/`
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
-| GET | `/` | Required | List orders (role-scoped) |
-| GET | `/{id}/` | Required | Order detail (role-scoped) |
-| PATCH | `/{id}/` | Vendor/Admin | Update status/tracking |
-| GET | `/coupons/` | Vendor | List own coupons |
+| GET | `/` | Required | List orders (role-scoped: customer=own, vendor=store, admin=all) |
+| GET | `/{id}/` | Required | Order detail (role-scoped serializer) |
+| PATCH | `/{id}/` | Vendor/Admin | Update status, tracking, carrier (customers blocked) |
+| GET | `/coupons/` | Vendor/Admin | List coupons (vendor: own store, admin: all) |
 | POST | `/coupons/` | Vendor | Create coupon |
-| PUT/PATCH/DELETE | `/coupons/{id}/` | Vendor | Manage coupon |
-| POST | `/coupons/validate/` | Required | Validate coupon at checkout |
-| GET | `/payouts/` | Vendor/Admin | List payouts |
-| POST | `/payouts/` | Vendor | Request payout (atomic + 2FA required) |
+| GET | `/coupons/{id}/` | Vendor/Admin | Coupon detail |
+| PUT | `/coupons/{id}/` | Vendor | Update coupon |
+| PATCH | `/coupons/{id}/` | Vendor | Partial update coupon |
+| DELETE | `/coupons/{id}/` | Vendor | Delete coupon |
+| POST | `/coupons/validate/` | Required | Validate coupon at checkout (returns discount info) |
+| GET | `/payouts/` | Vendor/Admin | List payouts (vendor: own store, admin: all) |
+| POST | `/payouts/` | Vendor | Request payout (requires 2FA, atomic transaction) |
 | GET | `/payouts/{id}/` | Vendor/Admin | Payout detail |
+
+> **Note:** Order creation (`POST /orders/`) is intentionally NOT implemented. A dedicated checkout endpoint will handle atomic payment + inventory + order creation.
 
 ### Transactions — `/api/v1/transactions/`
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
-| GET | `/` | Vendor/Admin | List transactions (role-scoped) |
-| GET | `/{id}/` | Vendor/Admin | Transaction detail |
+| GET | `/` | Vendor/Admin | List transactions (vendor: own store, admin: all) |
+| GET | `/{id}/` | Vendor/Admin | Transaction detail (role-scoped serializer) |
+
+> **Note:** Transactions are read-only and immutable. No create/update/delete endpoints exist.
 
 ### Reviews — `/api/v1/reviews/`
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
-| GET | `/` | Public | Published reviews |
-| POST | `/` | Customer | Write review (purchase required) |
+| GET | `/` | Public | Published reviews (vendor sees all including unpublished) |
+| POST | `/` | Customer | Create review (requires verified purchase) |
 | GET | `/{id}/` | Public | Review detail |
+| PUT | `/{id}/` | Admin | Full update review |
 | PATCH | `/{id}/` | Vendor/Admin | Vendor: reply only. Admin: all fields |
 | DELETE | `/{id}/` | Admin | Delete review |
-| GET | `/messages/` | Required | Inbox/outbox (sender or receiver) |
-| POST | `/messages/` | Required | Send message |
+| GET | `/messages/` | Required | List messages (sent or received) |
+| POST | `/messages/` | Required | Send message (immutable after creation) |
 | GET | `/messages/{id}/` | Required | Message detail |
-| POST | `/messages/{id}/mark_read/` | Required | Mark message read (receiver only) |
-| GET | `/notifications/` | Required | Own notifications |
-| POST | `/notifications/{id}/mark_read/` | Required | Mark notification read |
-| POST | `/notifications/mark_all_read/` | Required | Bulk mark read |
+| POST | `/messages/{id}/mark_read/` | Required | Mark message as read (receiver only) |
+| GET | `/notifications/` | Required | List own notifications |
+| GET | `/notifications/{id}/` | Required | Notification detail |
+| POST | `/notifications/{id}/mark_read/` | Required | Mark notification as read |
+| POST | `/notifications/mark_all_read/` | Required | Mark all notifications as read |
+
+### API Documentation — `/api/`
+
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| GET | `/schema/` | Public | OpenAPI 3.0 schema (JSON) |
+| GET | `/docs/` | Public | Swagger UI interactive documentation |
+| GET | `/redoc/` | Public | ReDoc documentation |
+
+### Django Admin — `/admin/`
+
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| * | `/admin/` | Admin (superuser) | Django admin panel |
 
 ---
 
