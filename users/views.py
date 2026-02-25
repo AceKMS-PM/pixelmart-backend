@@ -65,23 +65,6 @@ def _blacklist_all_tokens_for(user):
         BlacklistedToken.objects.get_or_create(token=token)
 
 
-def _get_totp_secret(user):
-    """
-    Safely retrieve and decrypt the TOTP secret.
-    Raises a Response with 500 status if decryption fails.
-    This wrapper ensures encryption errors surface as server errors
-    rather than misleading 'invalid code' messages.
-    """
-    try:
-        return user.totp_secret
-    except ValueError as e:
-        raise ValueError(
-            'TOTP secret decryption failed. This usually means ENCRYPTION_KEY '
-            'was changed without re-encrypting existing secrets. '
-            f'Original error: {e}'
-        )
-
-
 # ─────────────────────────────────────────────────────────────
 #  Registration
 # ─────────────────────────────────────────────────────────────
@@ -249,23 +232,14 @@ class Login2FAView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-        if not user._totp_secret_encrypted:
+        if not user.totp_secret:
             cache.delete(p_key)
             return Response(
                 {'error': 'Invalid or expired token.'},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-        try:
-            totp_secret = _get_totp_secret(user)
-        except ValueError:
-            cache.delete(p_key)
-            return Response(
-                {'error': 'Authentication service error. Please contact support.'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-        totp = pyotp.TOTP(totp_secret)
+        totp = pyotp.TOTP(user.totp_secret)
         if not totp.verify(code, valid_window=1):
             # Attempt was already counted above — just return the error
             return Response(
@@ -398,7 +372,7 @@ class TOTPSetupView(APIView):
 
         secret = pyotp.random_base32()
         user.totp_secret = secret
-        user.save(update_fields=['_totp_secret_encrypted'])
+        user.save(update_fields=['totp_secret'])
 
         totp = pyotp.TOTP(secret)
         uri  = totp.provisioning_uri(name=user.email, issuer_name='Pixel-Mart')
@@ -448,21 +422,13 @@ class TOTPVerifyView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if not user._totp_secret_encrypted:
+        if not user.totp_secret:
             return Response(
                 {'error': '2FA setup not initiated. Call POST /auth/2fa/setup/ first.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        try:
-            totp_secret = _get_totp_secret(user)
-        except ValueError:
-            return Response(
-                {'error': 'Authentication service error. Please contact support.'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-        totp = pyotp.TOTP(totp_secret)
+        totp = pyotp.TOTP(user.totp_secret)
         if not totp.verify(serializer.validated_data['code'], valid_window=1):
             return Response(
                 {'error': 'Invalid code. Please try again.'},
@@ -520,22 +486,14 @@ class TOTPDisableView(APIView):
                 )
 
         # ── Guard: should never happen if is_2fa_enabled is True ─
-        if not user._totp_secret_encrypted:
+        if not user.totp_secret:
             return Response(
                 {'error': 'Inconsistent 2FA state. Please contact support.'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
         # ── Verify the code ─────────────────────────────────────
-        try:
-            totp_secret = _get_totp_secret(user)
-        except ValueError:
-            return Response(
-                {'error': 'Authentication service error. Please contact support.'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-        totp = pyotp.TOTP(totp_secret)
+        totp = pyotp.TOTP(user.totp_secret)
         if not totp.verify(serializer.validated_data['code'], valid_window=1):
             return Response(
                 {'error': 'Invalid code.'},
@@ -544,7 +502,7 @@ class TOTPDisableView(APIView):
 
         user.is_2fa_enabled = False
         user.totp_secret     = None
-        user.save(update_fields=['is_2fa_enabled', '_totp_secret_encrypted'])
+        user.save(update_fields=['is_2fa_enabled', 'totp_secret'])
 
         return Response({'message': '2FA disabled successfully.'})
 
