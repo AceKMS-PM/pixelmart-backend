@@ -100,6 +100,15 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 AUTH_USER_MODEL = 'users.User'
 
+# Redis Cache — REQUIRED for 2FA login flow
+REDIS_URL = config('REDIS_URL', default='redis://localhost:6379/0')
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': REDIS_URL,
+    }
+}
+
 # CORS
 CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='http://localhost:3000', cast=Csv())
 CORS_ALLOW_CREDENTIALS = True
@@ -129,6 +138,9 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'anon': '60/min',
         'user': '300/min',
+        'login': '5/min',
+        'register': '10/min',
+        'password_reset': '3/min',
     },
 }
 
@@ -156,7 +168,10 @@ COMMISSION_RATES = {
     'business': 200,
 }
 
-# Minimum payout amount in cents (100 = €1)
-MIN_PAYOUT_AMOUNT = 100
+# Minimum payout amount in XOF (500 XOF ≈ €0.76)
+MIN_PAYOUT_AMOUNT = 500
+
+# Encryption key for sensitive fields (Fernet key - generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+ENCRYPTION_KEY = config('ENCRYPTION_KEY', default='')
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

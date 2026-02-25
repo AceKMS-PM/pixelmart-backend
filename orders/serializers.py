@@ -5,23 +5,24 @@ from .models import Order, OrderItem, Coupon, Payout
 # ── Order Item ────────────────────────────────────────────────────────────────
 
 class OrderItemSerializer(serializers.ModelSerializer):
+    # OrderItem n'hérite pas de TimeStampedModel — champ uuid standalone conservé
     class Meta:
         model = OrderItem
         fields = [
-            'id', 'product', 'variant',
+            'uuid', 'product', 'variant',
             'title', 'sku', 'image_url',
             'quantity', 'unit_price', 'total_price',
         ]
-        read_only_fields = ['id', 'total_price']
+        read_only_fields = ['uuid', 'total_price']
 
 
 # ── Order — customer view ─────────────────────────────────────────────────────
 
 class OrderCustomerSerializer(serializers.ModelSerializer):
     """
-    Returned to the customer who placed the order.
-    EXCLUDED: commission_amount (internal), payment_reference (sensitive),
-              billing_address (invoice endpoint only).
+    Retourné au client ayant passé la commande.
+    EXCLU : commission_amount (interne), payment_reference (sensible),
+            billing_address (endpoint facture uniquement).
     """
     items = OrderItemSerializer(source='order_items', many=True, read_only=True)
 
@@ -35,16 +36,16 @@ class OrderCustomerSerializer(serializers.ModelSerializer):
             'tracking_number', 'carrier', 'estimated_delivery', 'delivered_at',
             'notes', 'created_at', 'updated_at',
         ]
-        read_only_fields = fields  # customers cannot mutate orders via this serializer
+        read_only_fields = fields
 
 
 # ── Order — vendor view ───────────────────────────────────────────────────────
 
 class OrderVendorSerializer(serializers.ModelSerializer):
     """
-    Returned to the vendor who owns the store.
-    Adds: customer name + email (needed for fulfilment), commission_amount.
-    EXCLUDED: full billing_address (privacy), payment_reference (no need).
+    Retourné au vendeur propriétaire de la boutique.
+    Ajoute : nom + email client (nécessaire pour l'expédition), commission_amount.
+    EXCLU : billing_address (vie privée), payment_reference (inutile côté vendor).
     """
     customer_name = serializers.CharField(source='customer.name', read_only=True)
     customer_email = serializers.EmailField(source='customer.email', read_only=True)
@@ -75,7 +76,7 @@ class OrderVendorSerializer(serializers.ModelSerializer):
 # ── Order — admin view ────────────────────────────────────────────────────────
 
 class OrderAdminSerializer(serializers.ModelSerializer):
-    """Full detail for admins — all fields including payment_reference."""
+    """Admin — tous les champs dont payment_reference."""
     items = OrderItemSerializer(source='order_items', many=True, read_only=True)
 
     class Meta:
@@ -87,8 +88,8 @@ class OrderAdminSerializer(serializers.ModelSerializer):
 
 class CouponSerializer(serializers.ModelSerializer):
     """
-    Vendor-facing coupon management.
-    used_count is read-only — never client-writable.
+    Gestion vendor des coupons.
+    used_count est read-only — jamais modifiable par le client.
     """
     class Meta:
         model = Coupon
@@ -103,8 +104,8 @@ class CouponSerializer(serializers.ModelSerializer):
 
 class CouponPublicSerializer(serializers.ModelSerializer):
     """
-    Returned to customers on coupon validation.
-    EXCLUDED: used_count, max_uses, store internals.
+    Retourné au client lors de la validation d'un coupon.
+    EXCLU : used_count, max_uses, config interne boutique.
     """
     class Meta:
         model = Coupon
@@ -115,20 +116,28 @@ class CouponPublicSerializer(serializers.ModelSerializer):
 
 class PayoutSerializer(serializers.ModelSerializer):
     """
-    Vendor-facing payout history.
-    EXCLUDED: failure_reason (admin only), external_ref (internal).
+    Historique des virements côté vendor.
+    EXCLU : failure_reason (admin only), external_ref (interne).
+    transaction_id exposé en lecture seule — permet au vendor de croiser
+    avec son historique de transactions si besoin.
     """
+    transaction_id = serializers.PrimaryKeyRelatedField(
+        source='transaction', read_only=True
+    )
+
     class Meta:
         model = Payout
         fields = [
             'id', 'amount', 'currency', 'method',
-            'destination', 'status', 'processed_at', 'created_at',
+            'destination', 'status',
+            'transaction_id',
+            'processed_at', 'created_at',
         ]
-        read_only_fields = ['id', 'status', 'processed_at', 'created_at']
+        read_only_fields = ['id', 'status', 'transaction_id', 'processed_at', 'created_at']
 
 
 class PayoutAdminSerializer(serializers.ModelSerializer):
-    """Admin sees everything including failure_reason and external_ref."""
+    """Admin — tous les champs dont failure_reason, external_ref et transaction."""
     class Meta:
         model = Payout
         fields = '__all__'

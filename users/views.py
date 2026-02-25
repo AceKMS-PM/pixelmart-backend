@@ -16,6 +16,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
 
+from common.throttling import LoginRateThrottle, RegisterRateThrottle
 from .serializers import (
     UserSerializer,
     UserRegistrationSerializer,
@@ -53,15 +54,43 @@ def _attempt_cache_key(token):
 def _blacklist_all_tokens_for(user):
     """
     Blacklist every outstanding refresh token for this user.
-    Called after password change so stolen sessions can't be reused.
+    Called after password change and account deletion so stolen sessions
+    cannot be reused.
     Requires rest_framework_simplejwt.token_blacklist in INSTALLED_APPS.
     """
     from rest_framework_simplejwt.token_blacklist.models import (
-        OutstandingToken, BlacklistedToken
+        OutstandingToken, BlacklistedToken,
     )
-    tokens = OutstandingToken.objects.filter(user=user)
-    for token in tokens:
+    for token in OutstandingToken.objects.filter(user=user):
         BlacklistedToken.objects.get_or_create(token=token)
+
+
+def _get_totp_or_500(user):
+    """
+    Safely decrypt the user's TOTP secret and return a pyotp.TOTP instance.
+
+    Returns:
+      pyotp.TOTP  — on success
+      None        — if no secret is set (caller treats this as invalid state)
+      Response    — HTTP 500 if decryption fails (key mismatch / corruption)
+
+    Usage in views:
+        totp = _get_totp_or_500(user)
+        if isinstance(totp, Response):
+            return totp
+        if totp is None:
+            return Response({'error': '...'}, status=400)
+    """
+    try:
+        plain = user.totp_secret
+    except ValueError:
+        return Response(
+            {'error': 'Authentication service error. Please contact support.'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    if not plain:
+        return None
+    return pyotp.TOTP(plain)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -71,22 +100,39 @@ def _blacklist_all_tokens_for(user):
 class RegisterView(generics.CreateAPIView):
     """
     POST /auth/register/
-    Public. role='admin' blocked in UserRegistrationSerializer.validate_role().
+
+    Creates the account and sends a verification email.
+    NO tokens issued — the user must verify their email first, then
+    log in via POST /auth/login/.
+
+    Issuing tokens here would make the is_verified gate in LoginView
+    meaningless: the user could skip login entirely and use the tokens
+    from registration to access protected endpoints while unverified.
+
+    Throttled: 10 req/min/IP (RegisterRateThrottle).
     """
     queryset           = User.objects.all()
     permission_classes = [AllowAny]
     serializer_class   = UserRegistrationSerializer
+    throttle_classes   = [RegisterRateThrottle]
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user   = serializer.save()
-        tokens = _issue_tokens(user)
+        user = serializer.save()
+
+        # TODO: trigger verification email
+        # from .tasks import send_verification_email
+        # send_verification_email.delay(user.pk)
+
         return Response(
             {
                 'user':    UserSerializer(user).data,
-                **tokens,
-                'message': 'Registration successful. Please verify your email.',
+                'message': (
+                    'Registration successful. '
+                    'Please check your email and click the verification link '
+                    'before logging in.'
+                ),
             },
             status=status.HTTP_201_CREATED,
         )
@@ -102,12 +148,17 @@ class LoginView(APIView):
 
     Security decisions:
     1. Identical error for wrong email AND wrong password — no user enumeration.
-    2. is_banned + is_active checked BEFORE the 2FA branch — blocked users
-       never reach the 2FA endpoint.
-    3. 2FA challenge returns an opaque pending_token (Redis, 5-min TTL).
+    2. is_banned + is_active checked before any other branch.
+    3. is_verified gate: checked AFTER password validation (so an attacker
+       with a wrong password cannot confirm that the email exists and is
+       unverified). Returns a distinct error code so the frontend can
+       offer a "Resend verification email" button.
+    4. 2FA challenge returns an opaque pending_token (Redis, 5-min TTL).
        The real user PK is never sent to the client.
+    5. Throttled: 5 req/min/IP (LoginRateThrottle).
     """
     permission_classes = [AllowAny]
+    throttle_classes   = [LoginRateThrottle]
 
     def post(self, request):
         email    = request.data.get('email', '').strip().lower()
@@ -144,13 +195,24 @@ class LoginView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        # ── Email verification gate ────────────────────────────
+        # Checked after password so a wrong-password request cannot be used
+        # to probe whether a given email is registered and unverified.
+        if not user.is_verified:
+            return Response(
+                {
+                    'error': 'Email not verified. Please check your inbox.',
+                    'code':  'EMAIL_NOT_VERIFIED',  # frontend uses this for "Resend" button
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         if user.is_2fa_enabled:
             pending_token = secrets.token_urlsafe(32)
             cache.set(_pending_cache_key(pending_token), user.pk, timeout=300)
             return Response({
                 'requires_2fa':  True,
                 'pending_token': pending_token,
-                # user_id intentionally omitted — never expose DB PKs here
             })
 
         tokens = _issue_tokens(user)
@@ -167,15 +229,10 @@ class Login2FAView(APIView):
 
     Security decisions:
     1. pending_token resolves to user PK via Redis — no DB ID on the wire.
-    2. Attempt counter uses cache.add() + cache.incr() for atomic increments,
-       preventing the race condition where parallel requests both read 0 and
-       both get counted as attempt 1.
-    3. Max 5 attempts — on lockout both cache keys are destroyed, forcing
-       the user to restart from POST /auth/login/.
-    4. On success both keys are deleted immediately (one-time-use token).
-    5. Missing totp_secret returns the same generic error as an expired token —
-       no information about account state leaked.
-    6. HTTP 401 (not 400) for bad codes — consistent with RFC 9110.
+    2. Attempt counter uses cache.add() + cache.incr() — atomic, race-safe.
+    3. Max 5 attempts — lockout destroys both keys, forces restart from login.
+    4. On success both keys deleted immediately (one-time-use token).
+    5. Decryption errors return 500 — server config problem, not user error.
     """
     permission_classes = [AllowAny]
 
@@ -201,11 +258,6 @@ class Login2FAView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-        # ── Atomic attempt counting (fix for race condition) ───
-        # cache.add() only sets the key if it doesn't already exist.
-        # cache.incr() atomically increments and returns the new value.
-        # Together they guarantee we never hand out more than MAX_ATTEMPTS
-        # even under concurrent requests.
         a_key = _attempt_cache_key(pending_token)
         cache.add(a_key, 0, timeout=self._TTL)
         attempts = cache.incr(a_key)
@@ -227,22 +279,23 @@ class Login2FAView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-        if not user.totp_secret:
+        totp = _get_totp_or_500(user)
+        if isinstance(totp, Response):
+            cache.delete(p_key)
+            return totp
+        if totp is None:
             cache.delete(p_key)
             return Response(
                 {'error': 'Invalid or expired token.'},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-        totp = pyotp.TOTP(user.totp_secret)
         if not totp.verify(code, valid_window=1):
-            # Attempt was already counted above — just return the error
             return Response(
                 {'error': 'Invalid 2FA code.'},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-        # ── Success — consume both keys immediately ─────────────
         cache.delete(p_key)
         cache.delete(a_key)
 
@@ -257,11 +310,7 @@ class Login2FAView(APIView):
 class LogoutView(APIView):
     """
     POST /auth/logout/
-
-    Security decisions:
-    - Always returns 200, even if no token was provided or already expired.
-      Prevents probing whether a token is still valid.
-    - TokenError swallowed intentionally.
+    Always 200 — prevents probing token validity. TokenError swallowed.
     """
     permission_classes = [IsAuthenticated]
 
@@ -281,13 +330,11 @@ class LogoutView(APIView):
 
 class ProfileView(generics.RetrieveUpdateAPIView):
     """
-    GET   /auth/me/  → UserSerializer (safe fields only)
+    GET   /auth/me/  → UserSerializer
     PATCH /auth/me/  → UserUpdateSerializer (name, avatar, phone, locale)
 
-    Security decisions:
-    - Email updates are intentionally blocked here — they require re-verification.
-      Add a dedicated /auth/me/email/ endpoint with a confirmation flow later.
-    - role, is_verified, is_2fa_enabled are read-only in both serializers.
+    Email changes blocked here — require re-verification via a future
+    dedicated endpoint.
     """
     permission_classes = [IsAuthenticated]
 
@@ -308,12 +355,8 @@ class ChangePasswordView(generics.UpdateAPIView):
     """
     PUT /auth/me/password/
 
-    Security decisions:
-    - old_password validated in ChangePasswordSerializer.
-    - new_password must differ from old (serializer enforces).
-    - After a successful change, ALL outstanding refresh tokens for this
-      user are blacklisted. This ensures that a stolen refresh token
-      (from a breach or a leaked log) cannot be reused after a password reset.
+    After save, ALL outstanding refresh tokens are blacklisted —
+    stolen tokens from a breach cannot be reused after a password reset.
     """
     permission_classes = [IsAuthenticated]
     serializer_class   = ChangePasswordSerializer
@@ -325,7 +368,6 @@ class ChangePasswordView(generics.UpdateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        # Invalidate all existing sessions — stolen refresh tokens are now dead
         _blacklist_all_tokens_for(request.user)
         return Response({'message': 'Password changed successfully. Please log in again.'})
 
@@ -336,27 +378,17 @@ class ChangePasswordView(generics.UpdateAPIView):
 
 class TOTPSetupView(APIView):
     """
-    POST /auth/2fa/setup/   ← POST, not GET (this endpoint mutates state)
+    POST /auth/2fa/setup/
 
-    Generates a new TOTP secret, saves it unactivated, returns the secret
-    + a QR code PNG for the authenticator app to scan.
+    Generates + encrypts a new TOTP secret, returns plaintext secret + QR code.
+    2FA activated only after POST /auth/2fa/verify/.
 
-    2FA is activated only after a successful POST to TOTPVerifyView.
-
-    Security decisions:
-    - Must be POST, not GET. GET must be idempotent per HTTP spec; this
-      endpoint writes totp_secret to the DB on every call. A GET would be
-      vulnerable to browser prefetches, proxy caching, and accidental double
-      requests overwriting a secret the user is in the middle of scanning.
-    - Blocked if 2FA is already fully enabled (must disable first).
-    - Repeated POSTs before verify overwrite the previous secret — intentional
-      idempotency for the setup flow.
-    - secret is returned in plaintext (user needs it for manual app entry).
-      TODO: encrypt totp_secret at rest (AES-256, as per spec).
+    POST not GET — this endpoint writes to DB. A GET would risk browser
+    prefetch overwriting the secret while the user is scanning the QR code.
     """
     permission_classes = [IsAuthenticated]
 
-    def post(self, request):                     # ← was GET, now POST
+    def post(self, request):
         user = request.user
 
         if user.is_2fa_enabled:
@@ -365,11 +397,11 @@ class TOTPSetupView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        secret = pyotp.random_base32()
-        user.totp_secret = secret
-        user.save(update_fields=['totp_secret'])
+        plain_secret     = pyotp.random_base32()
+        user.totp_secret = plain_secret               # setter encrypts automatically
+        user.save(update_fields=['_totp_secret_encrypted'])
 
-        totp = pyotp.TOTP(secret)
+        totp = pyotp.TOTP(plain_secret)
         uri  = totp.provisioning_uri(name=user.email, issuer_name='Pixel-Mart')
 
         qr = qrcode.QRCode(version=1, box_size=10, border=5)
@@ -381,7 +413,7 @@ class TOTPSetupView(APIView):
         qr_b64 = base64.b64encode(buf.getvalue()).decode()
 
         return Response({
-            'secret':    secret,
+            'secret':    plain_secret,
             'qr_code':   f'data:image/png;base64,{qr_b64}',
             'next_step': 'POST /auth/2fa/verify/ with a valid 6-digit code to activate.',
         })
@@ -392,17 +424,7 @@ class TOTPSetupView(APIView):
 # ─────────────────────────────────────────────────────────────
 
 class TOTPVerifyView(APIView):
-    """
-    POST /auth/2fa/verify/
-
-    Validates the TOTP code against the pending secret, then activates 2FA.
-
-    Security decisions:
-    - Blocked if 2FA is already enabled.
-    - Blocked if totp_secret is absent (setup never called).
-    - No extra rate-limit: user is fully authenticated (valid JWT), so the
-      attack surface is already narrow — they'd have to own the session.
-    """
+    """POST /auth/2fa/verify/ — validates code, activates 2FA."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -417,13 +439,15 @@ class TOTPVerifyView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if not user.totp_secret:
+        totp = _get_totp_or_500(user)
+        if isinstance(totp, Response):
+            return totp
+        if totp is None:
             return Response(
                 {'error': '2FA setup not initiated. Call POST /auth/2fa/setup/ first.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        totp = pyotp.TOTP(user.totp_secret)
         if not totp.verify(serializer.validated_data['code'], valid_window=1):
             return Response(
                 {'error': 'Invalid code. Please try again.'},
@@ -432,7 +456,6 @@ class TOTPVerifyView(APIView):
 
         user.is_2fa_enabled = True
         user.save(update_fields=['is_2fa_enabled'])
-
         return Response({'message': '2FA enabled successfully.'})
 
 
@@ -444,17 +467,9 @@ class TOTPDisableView(APIView):
     """
     POST /auth/2fa/disable/
 
-    Requires a valid TOTP code to confirm intent — protects against hijacked sessions.
-
-    Security decisions:
-    - Input validation (serializer) runs FIRST, before any business logic
-      that would reveal account state (payout check, totp_secret check).
-      This prevents an attacker from inferring account state from which
-      error they receive.
-    - Vendors blocked if a payout is pending (spec rule).
-    - totp_secret is nulled on success — future setup generates a fresh secret.
-    - Inconsistent state (is_2fa_enabled=True, totp_secret=None) returns 500
-      rather than silently succeeding — it signals a data integrity issue.
+    Requires valid TOTP code. Serializer runs FIRST to avoid leaking
+    account state through different error paths.
+    Vendors blocked if a payout is pending.
     """
     permission_classes = [IsAuthenticated]
 
@@ -467,11 +482,9 @@ class TOTPDisableView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # ── Validate input FIRST (before revealing any account state) ──
         serializer = TOTPVerifySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        # ── Business rule: vendor + pending payout ──────────────
         if user.is_vendor:
             from orders.models import Payout
             if Payout.objects.filter(store__owner=user, status='pending').exists():
@@ -480,15 +493,15 @@ class TOTPDisableView(APIView):
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
-        # ── Guard: should never happen if is_2fa_enabled is True ─
-        if not user.totp_secret:
+        totp = _get_totp_or_500(user)
+        if isinstance(totp, Response):
+            return totp
+        if totp is None:
             return Response(
                 {'error': 'Inconsistent 2FA state. Please contact support.'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        # ── Verify the code ─────────────────────────────────────
-        totp = pyotp.TOTP(user.totp_secret)
         if not totp.verify(serializer.validated_data['code'], valid_window=1):
             return Response(
                 {'error': 'Invalid code.'},
@@ -496,7 +509,61 @@ class TOTPDisableView(APIView):
             )
 
         user.is_2fa_enabled = False
-        user.totp_secret     = None
-        user.save(update_fields=['is_2fa_enabled', 'totp_secret'])
+        user.totp_secret    = None
+        user.save(update_fields=['is_2fa_enabled', '_totp_secret_encrypted'])
 
         return Response({'message': '2FA disabled successfully.'})
+
+
+# ─────────────────────────────────────────────────────────────
+#  Account Deletion
+# ─────────────────────────────────────────────────────────────
+
+class DeleteAccountView(APIView):
+    """
+    DELETE /auth/me/delete/
+
+    Soft delete — data retained 30 days then purged by scheduled task.
+    Password confirmation required. Vendors blocked with pending payouts.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request):
+        password = request.data.get('password', '')
+
+        if not password:
+            return Response(
+                {'error': 'Password confirmation is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user = request.user
+
+        if not user.check_password(password):
+            return Response(
+                {'error': 'Invalid password.'},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        if user.is_vendor:
+            from orders.models import Payout
+            if Payout.objects.filter(
+                store__owner=user,
+                status__in=['pending', 'processing'],
+            ).exists():
+                return Response(
+                    {'error': 'Cannot delete account while a payout is pending or processing.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        user.deleted_at = timezone.now()
+        user.is_active  = False
+        user.email      = f'deleted_{user.pk}@deleted.pixelmart.local'
+        user.save(update_fields=['deleted_at', 'is_active', 'email'])
+
+        _blacklist_all_tokens_for(user)
+
+        return Response(
+            {'message': 'Account scheduled for deletion. You have 30 days to contact support to recover it.'},
+            status=status.HTTP_200_OK,
+        )
