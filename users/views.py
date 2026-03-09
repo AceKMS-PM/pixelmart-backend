@@ -8,6 +8,7 @@ import qrcode
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.utils import timezone
+from django.conf import settings
 
 from rest_framework import status, generics
 from rest_framework.views import APIView
@@ -17,6 +18,8 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
 
 from common.throttling import LoginRateThrottle, RegisterRateThrottle
+from common.verification_token import generate_verification_token, verify_token
+from common.emails import send_verification_email, send_welcome_email
 from .serializers import (
     UserSerializer,
     UserRegistrationSerializer,
@@ -121,9 +124,12 @@ class RegisterView(generics.CreateAPIView):
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
 
-        # TODO: trigger verification email
-        # from .tasks import send_verification_email
-        # send_verification_email.delay(user.pk)
+        # Generate verification token and send email
+        token = generate_verification_token(str(user.pk))
+        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000')
+        verification_url = f'{frontend_url}/verify-email?token={token}'
+
+        send_verification_email(user.email, verification_url, user.name)
 
         return Response(
             {
@@ -565,5 +571,133 @@ class DeleteAccountView(APIView):
 
         return Response(
             {'message': 'Account scheduled for deletion. You have 30 days to contact support to recover it.'},
+            status=status.HTTP_200_OK,
+        )
+
+
+# ─────────────────────────────────────────────────────────────
+#  Email Verification
+# ─────────────────────────────────────────────────────────────
+
+from common.throttling import VerifyEmailRateThrottle
+
+class VerifyEmailView(APIView):
+    """
+    POST /auth/verify-email/
+    
+    Verifies user's email address using the token sent to their inbox.
+    Token is single-use and expires after 24 hours.
+    Rate limited: 10 requests per minute per IP.
+    """
+    permission_classes = [AllowAny]
+    throttle_classes = [VerifyEmailRateThrottle]
+
+    def post(self, request):
+        token = request.data.get('token', '').strip()
+
+        if not token:
+            return Response(
+                {'error': 'Token is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user_id = verify_token(token)
+        
+        if not user_id:
+            return Response(
+                {'error': 'Invalid or expired verification token.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            user = User.objects.get(pk=user_id)
+        except User.DoesNotExist:
+            return Response(
+                {'error': 'User not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if user.is_verified:
+            return Response(
+                {'message': 'Email already verified. You can log in.'},
+                status=status.HTTP_200_OK,
+            )
+
+        user.is_verified = True
+        user.save(update_fields=['is_verified'])
+
+        # Send welcome email
+        send_welcome_email(user.email, user.name)
+
+        return Response(
+            {'message': 'Email verified successfully. You can now log in.'},
+            status=status.HTTP_200_OK,
+        )
+
+
+class ResendVerificationView(APIView):
+    """
+    POST /auth/resend-verification/
+    
+    Resends the verification email to unverified users.
+    Rate limited: 1 email per hour per email address.
+    """
+    permission_classes = [AllowAny]
+
+    RESEND_THROTTLE = 3600  # 1 hour
+
+    def post(self, request):
+        email = request.data.get('email', '').strip().lower()
+
+        if not email:
+            return Response(
+                {'error': 'Email is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Rate limiting check
+        throttle_key = f'verification_resend:{email}'
+        if cache.get(throttle_key):
+            return Response(
+                {
+                    'error': 'Too many requests. Please try again later.',
+                    'retry_after': self.RESEND_THROTTLE,
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            # Don't reveal whether email exists
+            return Response(
+                {'message': 'If an account exists with this email, a verification link has been sent.'},
+                status=status.HTTP_200_OK,
+            )
+
+        if user.is_verified:
+            return Response(
+                {'message': 'Email is already verified. You can log in.'},
+                status=status.HTTP_200_OK,
+            )
+
+        # Generate new token and send email
+        token = generate_verification_token(str(user.pk))
+        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000')
+        verification_url = f'{frontend_url}/verify-email?token={token}'
+
+        success = send_verification_email(user.email, verification_url, user.name)
+        
+        if not success:
+            return Response(
+                {'error': 'Failed to send verification email. Please try again later.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # Set throttle
+        cache.set(throttle_key, True, timeout=self.RESEND_THROTTLE)
+
+        return Response(
+            {'message': 'Verification email sent. Please check your inbox.'},
             status=status.HTTP_200_OK,
         )

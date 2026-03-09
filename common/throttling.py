@@ -26,3 +26,11 @@ class PasswordResetRateThrottle(ScopedRateThrottle):
     Prevents email spam abuse.
     """
     scope = 'password_reset'
+
+
+class VerifyEmailRateThrottle(ScopedRateThrottle):
+    """
+    Throttle for email verification endpoint - 10 requests per minute per IP.
+    Prevents brute-force token attacks.
+    """
+    scope = 'verify_email'

@@ -1307,6 +1307,15 @@ ENCRYPTION_KEY=your-fernet-key-here
 # CORS — REQUIRED
 CORS_ALLOWED_ORIGINS=https://yourdomain.com
 
+To see the verification email, check the terminal where Django is running, or configure a real SMTP server in .env:
+EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=587
+EMAIL_USE_TLS=True
+EMAIL_HOST_USER=your-email@gmail.com
+EMAIL_HOST_PASSWORD=your-app-password
+For Gmail: Use an App Password (https://support.google.com/accounts/answer/185833) instead of your regular password.
+
 # JWT — optional, defaults shown
 # ACCESS_TOKEN_LIFETIME=60 minutes
 # REFRESH_TOKEN_LIFETIME=7 days

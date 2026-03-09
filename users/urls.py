@@ -4,6 +4,7 @@ from .views import (
     RegisterView, LoginView, Login2FAView, ProfileView,
     ChangePasswordView, TOTPSetupView, TOTPVerifyView,
     TOTPDisableView, LogoutView, DeleteAccountView,
+    VerifyEmailView, ResendVerificationView,
 )
 
 urlpatterns = [
@@ -13,6 +14,10 @@ urlpatterns = [
     path('login/2fa/',   Login2FAView.as_view(),    name='login-2fa'),
     path('logout/',      LogoutView.as_view(),      name='logout'),
     path('refresh/',     TokenRefreshView.as_view(), name='token_refresh'),
+
+    # ── Email Verification ────────────────────────────────────
+    path('verify-email/', VerifyEmailView.as_view(), name='verify-email'),
+    path('resend-verification/', ResendVerificationView.as_view(), name='resend-verification'),
 
     # ── Profile ────────────────────────────────────────────────
     path('me/',          ProfileView.as_view(),     name='profile'),
