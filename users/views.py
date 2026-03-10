@@ -18,6 +18,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
 
 from common.throttling import LoginRateThrottle, RegisterRateThrottle
+from common.throttling import VerifyEmailRateThrottle
 from common.verification_token import generate_verification_token, verify_token
 from common.emails import send_verification_email, send_welcome_email
 from .serializers import (
@@ -579,7 +580,7 @@ class DeleteAccountView(APIView):
 #  Email Verification
 # ─────────────────────────────────────────────────────────────
 
-from common.throttling import VerifyEmailRateThrottle
+
 
 class VerifyEmailView(APIView):
     """
@@ -638,66 +639,46 @@ class VerifyEmailView(APIView):
 class ResendVerificationView(APIView):
     """
     POST /auth/resend-verification/
-    
-    Resends the verification email to unverified users.
-    Rate limited: 1 email per hour per email address.
+    Body: { "email": "..." }
+
+    Rate limited: 1 request per hour per email.
+    Response is always the same regardless of whether the email exists
+    or the account is already verified — prevents user enumeration.
     """
     permission_classes = [AllowAny]
+    _THROTTLE_TTL = 3600  # 1 hour
 
-    RESEND_THROTTLE = 3600  # 1 hour
+    _GENERIC_RESPONSE = Response(
+        {'message': 'If an account exists with this email, a verification link has been sent.'},
+        status=status.HTTP_200_OK,
+    )
 
     def post(self, request):
         email = request.data.get('email', '').strip().lower()
 
         if not email:
-            return Response(
-                {'error': 'Email is required.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({'error': 'Email is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Rate limiting check
         throttle_key = f'verification_resend:{email}'
         if cache.get(throttle_key):
             return Response(
-                {
-                    'error': 'Too many requests. Please try again later.',
-                    'retry_after': self.RESEND_THROTTLE,
-                },
+                {'error': 'Too many requests. Please try again later.', 'retry_after': self._THROTTLE_TTL},
                 status=status.HTTP_429_TOO_MANY_REQUESTS,
             )
 
         try:
-            user = User.objects.get(email=email)
+            user = User.objects.get(email=email, is_active=True)
         except User.DoesNotExist:
-            # Don't reveal whether email exists
-            return Response(
-                {'message': 'If an account exists with this email, a verification link has been sent.'},
-                status=status.HTTP_200_OK,
-            )
+            # Same response — don't reveal whether the email exists
+            return self._GENERIC_RESPONSE
 
-        if user.is_verified:
-            return Response(
-                {'message': 'Email is already verified. You can log in.'},
-                status=status.HTTP_200_OK,
-            )
+        # Same response for already-verified — don't reveal account state
+        if not user.is_verified:
+            token            = generate_verification_token(str(user.pk))
+            frontend_url     = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000').rstrip('/')
+            verification_url = f'{frontend_url}/verify-email?token={token}'
+            send_verification_email(user.email, verification_url, user.name)
 
-        # Generate new token and send email
-        token = generate_verification_token(str(user.pk))
-        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000')
-        verification_url = f'{frontend_url}/verify-email?token={token}'
-
-        success = send_verification_email(user.email, verification_url, user.name)
+        cache.set(throttle_key, True, timeout=self._THROTTLE_TTL)
+        return self._GENERIC_RESPONSE
         
-        if not success:
-            return Response(
-                {'error': 'Failed to send verification email. Please try again later.'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-        # Set throttle
-        cache.set(throttle_key, True, timeout=self.RESEND_THROTTLE)
-
-        return Response(
-            {'message': 'Verification email sent. Please check your inbox.'},
-            status=status.HTTP_200_OK,
-        )

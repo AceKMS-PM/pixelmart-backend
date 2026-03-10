@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html>
+<html lang="fr">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Verify your PixelMart account</title>
+    <title>Vérifiez votre compte PixelMart</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
@@ -50,9 +50,6 @@
             margin: 20px 0;
             font-weight: 500;
         }
-        .button:hover {
-            background: #4338ca;
-        }
         .email-footer {
             background: #f9fafb;
             padding: 20px;
@@ -69,25 +66,25 @@
                 <h1>PixelMart</h1>
             </div>
             <div class="email-body">
-                <p>Hello {{ user_name }},</p>
-                
-                <p>Welcome to PixelMart! Please verify your email address by clicking the button below:</p>
-                
+                <p>Bonjour {{ user_name }},</p>
+
+                <p>Bienvenue sur PixelMart ! Veuillez vérifier votre adresse email en cliquant sur le bouton ci-dessous :</p>
+
                 <div style="text-align: center;">
-                    <a href="{{ verification_url }}" class="button">Verify Email Address</a>
+                    <a href="{{ verification_url }}" class="button">Vérifier mon adresse email</a>
                 </div>
-                
-                <p>Or copy and paste this link into your browser:</p>
+
+                <p>Ou copiez-collez ce lien dans votre navigateur :</p>
                 <p style="word-break: break-all; font-size: 14px; color: #6b7280;">
                     {{ verification_url }}
                 </p>
-                
-                <p><strong>Important:</strong> This link will expire in 24 hours.</p>
-                
-                <p>If you didn't create an account with PixelMart, please ignore this email.</p>
+
+                <p><strong>Important :</strong> Ce lien expirera dans 24 heures.</p>
+
+                <p>Si vous n'avez pas créé de compte sur PixelMart, ignorez cet email.</p>
             </div>
             <div class="email-footer">
-                <p>&copy; 2025 PixelMart. All rights reserved.</p>
+                <p>&copy; 2025 PixelMart. Tous droits réservés.</p>
             </div>
         </div>
     </div>

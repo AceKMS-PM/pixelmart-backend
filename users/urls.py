@@ -23,6 +23,8 @@ urlpatterns = [
     path('me/',          ProfileView.as_view(),     name='profile'),
     path('me/password/', ChangePasswordView.as_view(), name='change-password'),
     path('me/delete/',   DeleteAccountView.as_view(),  name='delete-account'),
+    
+    
 
     # ── 2FA ───────────────────────────────────────────────────
     # All three are POST — setup mutates state (generates + stores secret),
